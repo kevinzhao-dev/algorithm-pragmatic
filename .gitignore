@@ -10,3 +10,4 @@ materials/**/*.zip
 materials/**/code/
 
 .DS_Store
+__pycache__/
