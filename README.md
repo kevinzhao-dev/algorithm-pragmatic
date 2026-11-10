@@ -2,6 +2,8 @@
 
 把 MIT 三門課的作業變成一條可以依序走完的 C++ 練功路線，目標是 frontier lab 那種「把程式寫對、一輪一輪擴充、測試和 debug」的 coding interview。
 
+這是個人整理的非官方改編，與 MIT 無關。授權與出處見[文末](#授權與出處)。
+
 | 順序 | 課程 | 練什麼 | 份量 |
 | --- | --- | --- | --- |
 | 1 | MIT 6.006 Introduction to Algorithms（Spring 2020） | 資料結構、排序、圖、動態規劃 | 80 題，約 100 小時 |
@@ -86,7 +88,7 @@ python3 -I tools/fetch_materials.py
 python3 -I tools/fetch_materials.py --verify
 ```
 
-教材來自 [MIT OpenCourseWare](https://ocw.mit.edu)，著作權屬原權利人，以 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 授權（詳見 [OCW 使用條款](https://ocw.mit.edu/pages/privacy-and-terms-of-use/)）。`problems/` 和 `solutions/` 的題目敘述、介面、測試都是重新撰寫的，改編自這些課程的題目。如果要公開這個 repo，請保留這段出處並遵守該授權的姓名標示、非商業與相同方式分享條件。
+這些檔案的著作權屬 MIT 和原作者。repo 只放下載腳本，不重新散布檔案本身，出處和授權見[授權與出處](#授權與出處)。
 
 ## 環境說明
 
@@ -100,3 +102,17 @@ python3 -I tools/fetch_materials.py --verify
 | perf / cachegrind | 計時、計數器、確定性的快取模擬器，以及 `sample` / `xctrace` |
 | Valgrind | ASan / UBSan，加上 `Tracked` 型別檢查洩漏 |
 | AVX2 / x86 組語 | 編譯器向量化報告與 ARM NEON |
+
+## 授權與出處
+
+本 repo 的所有內容（題目、測試、參考解、工具和文件）以 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 授權，條款全文見 [LICENSE](LICENSE)。你可以自由分享和改作，但要標示出處、不能用於商業目的，分享改作版本時也要用同一個授權。
+
+題目改編自以下三門 MIT OpenCourseWare 課程，原教材同樣以 CC BY-NC-SA 4.0 授權：
+
+- Erik Demaine, Jason Ku, and Justin Solomon. *6.006 Introduction to Algorithms*. Spring 2020. Massachusetts Institute of Technology: MIT OpenCourseWare, <https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/>. License: Creative Commons BY-NC-SA.
+- Erik Demaine, Srini Devadas, and Nancy Lynch. *6.046J Design and Analysis of Algorithms*. Spring 2015. Massachusetts Institute of Technology: MIT OpenCourseWare, <https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/>. License: Creative Commons BY-NC-SA.
+- Charles Leiserson and Julian Shun. *6.172 Performance Engineering of Software Systems*. Fall 2018. Massachusetts Institute of Technology: MIT OpenCourseWare, <https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/>. License: Creative Commons BY-NC-SA.
+
+改編方式：題目敘述、介面、測試和參考解都是用 C++ 重新撰寫的。原課程的 Python 範本、Cilk 和 x86 工具換成了[環境說明](#環境說明)裡的替代品，6.172 的 Leiserchess 專案換成另一個原創遊戲。repo 不包含原課程的講義和作業檔案；用 `tools/fetch_materials.py` 下載的檔案仍適用 [OCW 使用條款](https://ocw.mit.edu/pages/privacy-and-terms-of-use/)。
+
+這是個人學習用的非官方改編，與 MIT 和 MIT OpenCourseWare 無關，也沒有經過它們審閱或認可。
