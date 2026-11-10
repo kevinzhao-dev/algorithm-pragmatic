@@ -1,0 +1,12 @@
+# Build trees
+build/
+.cache/
+compile_commands.json
+
+# Course downloads are large and can be restored with tools/fetch_materials.py.
+# MANIFEST.csv stays tracked so sources and checksums are versioned.
+materials/**/*.pdf
+materials/**/*.zip
+materials/**/code/
+
+.DS_Store

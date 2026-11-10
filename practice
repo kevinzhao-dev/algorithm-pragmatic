@@ -1,0 +1,549 @@
+#!/usr/bin/env -S python3 -I
+"""practice — 依序練功的指令列工具。
+
+  ./practice next [--course 6.172]    下一題該做什麼
+  ./practice test <題目>              建置並測試（關卡制）
+  ./practice list [--course 6.006]    所有題目與進度
+  ./practice done <題目>              手動標記完成（書面題用）
+  ./practice roadmap                  依題目資料重新產生 ROADMAP.md
+  ./practice audit [--course 6.006]   維護用：確認題目骨架會失敗、參考解全部通過
+
+<題目> 可以是編號（0104）、slug 片段（doubly），或完整路徑（6.006/0104-doubly-linked-list）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import concurrent.futures as futures
+import datetime
+import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, field
+
+ROOT = pathlib.Path(__file__).resolve().parent
+PROBLEMS = ROOT / "problems"
+SOLUTIONS = ROOT / "solutions"
+PROGRESS_FILE = ROOT / "progress.json"
+COURSE_ORDER = ["6.006", "6.046j", "6.172"]
+AUTOGRADED_KINDS = {"code", "perf", "project"}
+DEFAULT_TIMEOUT_SECONDS = 60
+
+
+@dataclass
+class Exercise:
+    course: str
+    slug: str
+    path: pathlib.Path
+    meta: dict[str, str]
+
+    @property
+    def id(self) -> str:
+        return f"{self.course}/{self.slug}"
+
+    @property
+    def number(self) -> str:
+        return self.slug.split("-", 1)[0]
+
+    @property
+    def kind(self) -> str:
+        return self.meta.get("kind", "code")
+
+    @property
+    def title(self) -> str:
+        return self.meta.get("title", self.slug)
+
+    @property
+    def target(self) -> str:
+        return "t_" + re.sub(r"[^A-Za-z0-9]", "_", self.id)
+
+    @property
+    def timeout(self) -> int:
+        return int(self.meta.get("timeout", DEFAULT_TIMEOUT_SECONDS))
+
+    def functional_mode(self) -> str:
+        return "tsan" if self.meta.get("sanitizer") == "tsan" else "asan"
+
+
+@dataclass
+class TestResult:
+    stage: int
+    kind: str
+    status: str
+    name: str
+    details: str = ""
+
+
+@dataclass
+class RunReport:
+    results: list[TestResult] = field(default_factory=list)
+    crashed_in: str | None = None
+    timed_out: bool = False
+    exit_code: int = 0
+    trailing_output: str = ""
+
+
+def parse_front_matter(readme: pathlib.Path) -> dict[str, str]:
+    meta: dict[str, str] = {}
+    lines = readme.read_text(encoding="utf-8").splitlines()
+    if not lines or lines[0].strip() != "---":
+        return meta
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        key, separator, value = line.partition(":")
+        if separator:
+            meta[key.strip()] = value.strip()
+    return meta
+
+
+def discover() -> list[Exercise]:
+    exercises: list[Exercise] = []
+    for course in COURSE_ORDER:
+        course_dir = PROBLEMS / course
+        if not course_dir.is_dir():
+            continue
+        for path in sorted(course_dir.iterdir()):
+            readme = path / "README.md"
+            if path.is_dir() and readme.exists() and re.match(r"\d{4}-", path.name):
+                exercises.append(Exercise(course, path.name, path, parse_front_matter(readme)))
+    return exercises
+
+
+def resolve(query: str, exercises: list[Exercise]) -> Exercise:
+    query = query.strip().rstrip("/")
+    query = query.removeprefix("problems/")
+    for exercise in exercises:
+        if query in (exercise.id, exercise.slug):
+            return exercise
+    matches = [e for e in exercises if e.number == query] or [e for e in exercises if query in e.id]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        sys.exit(f"找不到題目：{query}（用 ./practice list 看清單）")
+    listing = "\n".join(f"  {e.id}" for e in matches[:12])
+    sys.exit(f"「{query}」符合多題，請寫得更精確：\n{listing}")
+
+
+def load_progress() -> dict[str, dict]:
+    if PROGRESS_FILE.exists():
+        return json.loads(PROGRESS_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_progress(progress: dict[str, dict]) -> None:
+    text = json.dumps(progress, ensure_ascii=False, indent=2, sort_keys=True)
+    PROGRESS_FILE.write_text(text + "\n", encoding="utf-8")
+
+
+def mark_done(exercise: Exercise, how: str) -> None:
+    progress = load_progress()
+    progress[exercise.id] = {"status": how, "date": datetime.date.today().isoformat()}
+    save_progress(progress)
+
+
+def build_dir(mode: str, reference: bool) -> pathlib.Path:
+    base = pathlib.Path(os.environ.get("PRACTICE_BUILD_ROOT", ROOT / "build"))
+    return base / (f"{mode}-reference" if reference else mode)
+
+
+def configure(mode: str, reference: bool) -> pathlib.Path:
+    directory = build_dir(mode, reference)
+    if not (directory / "build.ninja").exists():
+        command = [
+            "cmake", "-S", str(ROOT), "-B", str(directory), "-G", "Ninja",
+            f"-DPRACTICE_MODE={mode}",
+            f"-DPRACTICE_USE_REFERENCE={'ON' if reference else 'OFF'}",
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True)
+        if completed.returncode != 0:
+            sys.exit(f"CMake 設定失敗：\n{completed.stdout}\n{completed.stderr}")
+    return directory
+
+
+def build(mode: str, reference: bool, targets: list[str]) -> bool:
+    directory = configure(mode, reference)
+    completed = subprocess.run(
+        ["cmake", "--build", str(directory), "--", "-k", "0", *targets],
+        capture_output=True, text=True,
+    )
+    if completed.returncode != 0:
+        print(completed.stdout)
+        print(completed.stderr, file=sys.stderr)
+        return False
+    return True
+
+
+def binary_path(exercise: Exercise, mode: str, reference: bool) -> pathlib.Path:
+    return build_dir(mode, reference) / "bin" / exercise.course / exercise.slug / "run"
+
+
+def run_tests(exercise: Exercise, mode: str, reference: bool, flags: list[str]) -> RunReport:
+    report = RunReport()
+    environment = dict(os.environ)
+    environment.setdefault("ASAN_OPTIONS", "detect_leaks=0:abort_on_error=0")
+    # Stop at the first race so it is attributed to the test that was running.
+    environment.setdefault("TSAN_OPTIONS", "halt_on_error=1")
+    try:
+        completed = subprocess.run(
+            [str(binary_path(exercise, mode, reference)), "--machine", *flags],
+            capture_output=True, text=True, errors="replace",
+            timeout=exercise.timeout, env=environment,
+            cwd=exercise.path,
+        )
+        stdout, stderr, report.exit_code = completed.stdout, completed.stderr, completed.returncode
+    except subprocess.TimeoutExpired as expired:
+        report.timed_out = True
+        stdout = expired.stdout.decode(errors="replace") if expired.stdout else ""
+        stderr = expired.stderr.decode(errors="replace") if expired.stderr else ""
+
+    running: str | None = None
+    details: list[str] = []
+    other: list[str] = []
+    for line in stdout.splitlines():
+        if line.startswith("@@start "):
+            running = line.split(" ", 3)[3]
+            details = []
+        elif line.startswith("@@result "):
+            _, stage, kind, status, _elapsed, name = line.split(" ", 5)
+            report.results.append(TestResult(int(stage), kind, status, name, "\n".join(details)))
+            running = None
+            details = []
+        elif running is not None:
+            details.append(line)
+        else:
+            other.append(line)
+
+    finished_cleanly = report.exit_code in (0, 1) and not report.timed_out
+    if running is not None or not finished_cleanly:
+        report.crashed_in = running or ("(所有測試結束之後)" if report.results else "(測試啟動前)")
+        # Sanitizer reports lead with the diagnosis, so keep the start rather than the tail.
+        report.trailing_output = "\n".join(details + other + stderr.splitlines()[:80])
+    return report
+
+
+def failure_reason(report: RunReport, timeout_hint: str) -> str:
+    if report.timed_out:
+        return f"逾時（{timeout_hint}）"
+    if "ThreadSanitizer" in report.trailing_output:
+        return "ThreadSanitizer 偵測到 data race"
+    if "AddressSanitizer" in report.trailing_output:
+        return "AddressSanitizer 偵測到記憶體錯誤"
+    if "runtime error:" in report.trailing_output:
+        return "UBSan 偵測到未定義行為"
+    return "程式崩潰"
+
+
+def summarize_stages(results: list[TestResult]) -> dict[int, tuple[int, int]]:
+    summary: dict[int, tuple[int, int]] = {}
+    for result in results:
+        passed, total = summary.get(result.stage, (0, 0))
+        summary[result.stage] = (passed + (result.status == "pass"), total + 1)
+    return summary
+
+
+def cmd_test(args: argparse.Namespace) -> int:
+    exercises = discover()
+    exercise = resolve(args.problem, exercises)
+    print(f"{exercise.id} — {exercise.title}")
+    if exercise.kind not in AUTOGRADED_KINDS:
+        print("這是書面題：寫完後對照解答，然後執行")
+        print(f"  ./practice done {exercise.number}")
+        return 0
+
+    mode = exercise.functional_mode()
+    if not build(mode, args.reference, [exercise.target]):
+        print("\n✗ 編譯失敗")
+        return 1
+    flags = ["--skip-perf"]
+    if args.stage:
+        flags += ["--stage", str(args.stage)]
+    functional = run_tests(exercise, mode, args.reference, flags)
+    results = list(functional.results)
+
+    if functional.timed_out or functional.crashed_in:
+        reason = failure_reason(functional, "可能有無窮迴圈")
+        print(f"\n✗ {reason}，發生在：{functional.crashed_in}")
+        print(functional.trailing_output)
+        return 1
+
+    performance: RunReport | None = None
+    stages = summarize_stages(results)
+    all_functional_pass = all(p == t for p, t in stages.values())
+    if all_functional_pass and not args.no_perf and not args.stage:
+        if not build("release", args.reference, [exercise.target]):
+            print("\n✗ Release 編譯失敗")
+            return 1
+        performance = run_tests(exercise, "release", args.reference, ["--perf-only"])
+        results += performance.results
+        if performance.timed_out or performance.crashed_in:
+            reason = failure_reason(performance, "複雜度可能不對")
+            print(f"\n✗ 效能測試{reason}，發生在：{performance.crashed_in}")
+            print(performance.trailing_output)
+            return 1
+
+    summary = summarize_stages(results)
+    current_stage = next((s for s, (p, t) in sorted(summary.items()) if p != t), None)
+    print()
+    for stage, (passed, total) in sorted(summary.items()):
+        if passed == total:
+            print(f"  stage {stage}  ✓ {passed}/{total}")
+        elif stage == current_stage:
+            print(f"  stage {stage}  ✗ {passed}/{total}  ← 目前關卡")
+        else:
+            print(f"  stage {stage}  · 尚未解鎖")
+
+    if current_stage is not None:
+        print()
+        shown = 0
+        for result in results:
+            if result.stage == current_stage and result.status != "pass" and shown < args.max_failures:
+                tag = "尚未實作" if result.status == "todo" else "失敗"
+                print(f"[{tag}] {result.name}")
+                if result.details:
+                    print(result.details)
+                shown += 1
+        hidden = sum(r.stage == current_stage and r.status != "pass" for r in results) - shown
+        if hidden > 0:
+            print(f"（還有 {hidden} 個失敗的測試，用 --max-failures 顯示更多）")
+        return 1
+
+    if args.stage or args.no_perf:
+        print("\n✓ 選定範圍全部通過（完整驗收請跑不帶參數的 ./practice test）")
+        return 0
+
+    print("\n✓ 全部關卡通過")
+    if not args.reference:
+        mark_done(exercise, "passed")
+    return 0
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    exercises = discover()
+    progress = load_progress()
+    current_course = None
+    done_count = 0
+    shown_count = 0
+    for exercise in exercises:
+        if args.course and exercise.course != args.course:
+            continue
+        if exercise.course != current_course:
+            current_course = exercise.course
+            print(f"\n== {current_course} ==")
+        finished = exercise.id in progress
+        done_count += finished
+        shown_count += 1
+        mark = "✓" if finished else "·"
+        minutes = exercise.meta.get("minutes", "?")
+        print(f" {mark} {exercise.number}  {exercise.kind:<7} {minutes:>4}m  {exercise.title}")
+    print(f"\n進度：{done_count}/{shown_count}")
+    return 0
+
+
+def cmd_next(args: argparse.Namespace) -> int:
+    progress = load_progress()
+    for exercise in discover():
+        if args.course and exercise.course != args.course:
+            continue
+        if exercise.id in progress:
+            continue
+        relative = exercise.path.relative_to(ROOT)
+        print(f"下一題：{exercise.id}")
+        print(f"  {exercise.title}（{exercise.kind}，約 {exercise.meta.get('minutes', '?')} 分鐘）")
+        print(f"  來源：{exercise.meta.get('source', '?')}")
+        reading = [p.strip() for p in exercise.meta.get("read", "").split(",") if p.strip()]
+        if reading:
+            print("  先讀：")
+            for path in reading:
+                print(f"    {path}")
+        print(f"  題目：{relative}/README.md")
+        if exercise.kind in AUTOGRADED_KINDS:
+            print(f"  測試：./practice test {exercise.number}")
+        else:
+            print(f"  完成：./practice done {exercise.number}")
+        return 0
+    print("全部完成了。")
+    return 0
+
+
+def cmd_done(args: argparse.Namespace) -> int:
+    exercise = resolve(args.problem, discover())
+    mark_done(exercise, "done")
+    print(f"已標記完成：{exercise.id}")
+    return 0
+
+
+def cmd_roadmap(args: argparse.Namespace) -> int:
+    exercises = discover()
+    course_titles = {
+        "6.006": "MIT 6.006 — Introduction to Algorithms (Spring 2020)",
+        "6.046j": "MIT 6.046J — Design and Analysis of Algorithms (Spring 2015)",
+        "6.172": "MIT 6.172 — Performance Engineering of Software Systems (Fall 2018)",
+    }
+    kind_labels = {"code": "實作", "paper": "書面", "perf": "效能", "project": "專案"}
+    lines = [
+        "# Roadmap",
+        "",
+        "由 `./practice roadmap` 依各題 README 的資料產生，請勿手動修改。",
+        "",
+    ]
+    for course in COURSE_ORDER:
+        selected = [e for e in exercises if e.course == course]
+        if not selected:
+            continue
+        minutes = sum(int(e.meta.get("minutes", 0) or 0) for e in selected)
+        lines += [f"## {course_titles[course]}", "", f"{len(selected)} 題，估計約 {minutes / 60:.0f} 小時。", ""]
+        current_unit = None
+        for exercise in selected:
+            unit = exercise.meta.get("unit", "")
+            if unit != current_unit:
+                current_unit = unit
+                lines += ["", f"### {unit}", "", "| 編號 | 題目 | 類型 | 分鐘 | 來源 |", "| --- | --- | --- | ---: | --- |"]
+            link = f"[{exercise.title}]({exercise.path.relative_to(ROOT)}/README.md)"
+            kind = kind_labels.get(exercise.kind, exercise.kind)
+            lines.append(
+                f"| {exercise.number} | {link} | {kind} | {exercise.meta.get('minutes', '?')} "
+                f"| {exercise.meta.get('source', '')} |"
+            )
+        lines.append("")
+    (ROOT / "ROADMAP.md").write_text("\n".join(lines), encoding="utf-8")
+    print(f"已更新 ROADMAP.md（{len(exercises)} 題）")
+    return 0
+
+
+def audit_structure(exercise: Exercise) -> list[str]:
+    problems: list[str] = []
+    required = ["title", "unit", "source", "pdf", "kind", "minutes"]
+    for key in required:
+        if key not in exercise.meta:
+            problems.append(f"front matter 缺少 {key}")
+    paths = [exercise.meta.get("pdf", "")] + [
+        p.strip() for p in exercise.meta.get("read", "").split(",") + [exercise.meta.get("answer", "")]
+    ]
+    for relative in paths:
+        if relative and not (ROOT / relative).exists():
+            problems.append(f"找不到教材：{relative}")
+    if exercise.kind in AUTOGRADED_KINDS:
+        if not list((exercise.path / "tests").glob("*.cpp")):
+            problems.append("缺少 tests/*.cpp")
+        if not (SOLUTIONS / exercise.course / exercise.slug).is_dir():
+            problems.append("缺少參考解")
+    return problems
+
+
+def audit_run(exercise: Exercise, mode: str, reference: bool, flags: list[str]) -> RunReport:
+    return run_tests(exercise, mode, reference, flags)
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    exercises = [e for e in discover() if not args.course or e.course == args.course]
+    if args.only:
+        exercises = [e for e in exercises if re.search(args.only, e.id)]
+    issues: list[str] = []
+    for exercise in exercises:
+        issues += [f"{exercise.id}: {problem}" for problem in audit_structure(exercise)]
+
+    graded = [e for e in exercises if e.kind in AUTOGRADED_KINDS]
+    groups = {
+        ("asan", True): [e for e in graded if e.functional_mode() == "asan"],
+        ("tsan", True): [e for e in graded if e.functional_mode() == "tsan"],
+        ("release", True): graded,
+        ("asan", False): graded,
+    }
+    for (mode, reference), group in groups.items():
+        if group and not build(mode, reference, [e.target for e in group]):
+            issues.append(f"建置失敗：mode={mode} reference={reference}")
+
+    def check(job: tuple[Exercise, str, bool, list[str]]) -> list[str]:
+        exercise, mode, reference, flags = job
+        if not binary_path(exercise, mode, reference).exists():
+            return [f"{exercise.id}: [{mode}{' ref' if reference else ''}] 沒有產生執行檔"]
+        report = audit_run(exercise, mode, reference, flags)
+        label = f"{exercise.id}: [{mode}{' 參考解' if reference else ' 骨架'}]"
+        if report.timed_out:
+            return [f"{label} 逾時，在 {report.crashed_in}"]
+        if report.crashed_in:
+            return [f"{label} 崩潰，在 {report.crashed_in}\n{report.trailing_output}"]
+        failing = [r for r in report.results if r.status != "pass"]
+        if reference:
+            return [f"{label} 未通過：{r.name}\n{r.details}" for r in failing]
+        if not report.results:
+            return [f"{label} 沒有任何測試"]
+        if not failing:
+            return [f"{label} 骨架竟然全部通過，測試太弱或骨架含答案"]
+        unexpected = [r for r in failing if r.status == "fail" and "not implemented" not in r.details]
+        return [f"{label} 骨架應回報「尚未實作」但失敗了：{r.name}\n{r.details}" for r in unexpected[:3]]
+
+    jobs: list[tuple[Exercise, str, bool, list[str]]] = []
+    for exercise in graded:
+        jobs.append((exercise, exercise.functional_mode(), True, ["--skip-perf"]))
+        jobs.append((exercise, "release", True, ["--perf-only"]))
+        jobs.append((exercise, "asan", False, ["--skip-perf"]))
+    with futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for found in pool.map(check, jobs):
+            issues += found
+
+    print(f"檢查了 {len(exercises)} 題（自動評測 {len(graded)} 題）")
+    if issues:
+        print(f"\n發現 {len(issues)} 個問題：")
+        for issue in issues:
+            print(f"- {issue}")
+        return 1
+    print("全部正常：骨架都會回報尚未實作，參考解全部通過。")
+    return 0
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    target = pathlib.Path(os.environ.get("PRACTICE_BUILD_ROOT", ROOT / "build"))
+    if target.exists():
+        shutil.rmtree(target)
+    print(f"已清除 {target}")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    next_parser = commands.add_parser("next")
+    next_parser.add_argument("--course", choices=COURSE_ORDER)
+    next_parser.set_defaults(handler=cmd_next)
+
+    list_parser = commands.add_parser("list")
+    list_parser.add_argument("--course", choices=COURSE_ORDER)
+    list_parser.set_defaults(handler=cmd_list)
+
+    test_parser = commands.add_parser("test")
+    test_parser.add_argument("problem")
+    test_parser.add_argument("--stage", type=int, default=0, help="只跑某一關")
+    test_parser.add_argument("--no-perf", action="store_true", help="略過 Release 效能測試")
+    test_parser.add_argument("--max-failures", type=int, default=3, help="最多顯示幾個失敗的測試")
+    test_parser.add_argument("--reference", action="store_true", help="改用 solutions/ 的參考解（會爆雷）")
+    test_parser.set_defaults(handler=cmd_test)
+
+    done_parser = commands.add_parser("done")
+    done_parser.add_argument("problem")
+    done_parser.set_defaults(handler=cmd_done)
+
+    roadmap_parser = commands.add_parser("roadmap")
+    roadmap_parser.set_defaults(handler=cmd_roadmap)
+
+    audit_parser = commands.add_parser("audit")
+    audit_parser.add_argument("--course", choices=COURSE_ORDER)
+    audit_parser.add_argument("--only", help="只檢查 id 符合此正規表示式的題目")
+    audit_parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    audit_parser.set_defaults(handler=cmd_audit)
+
+    clean_parser = commands.add_parser("clean")
+    clean_parser.set_defaults(handler=cmd_clean)
+
+    args = parser.parse_args()
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
