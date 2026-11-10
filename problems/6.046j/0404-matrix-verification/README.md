@@ -1,6 +1,6 @@
 ---
-title: Matrix Multiply 與 Freivalds 驗證
-unit: 04 · Amortization 與 Randomization（PS4）
+title: Matrix Multiply and Freivalds Verification
+unit: 04 · Amortization and Randomization (PS4)
 source: 6.046J Recitation 1, Lecture 6
 pdf: materials/6.046j/lectures/lec06.pdf
 read: materials/6.046j/recitations/rec01.pdf, materials/6.046j/lectures/lec06.pdf
@@ -8,35 +8,73 @@ kind: code
 minutes: 90
 ---
 
-# 0404 · Matrix Multiply 與 Freivalds 驗證
+# 0404 · Matrix Multiply and Freivalds Verification
 
-> **實務上為什麼會遇到**：把昂貴的矩陣運算丟給 GPU 或不受信任的 worker 算之後，要怎麼便宜地確認結果沒被硬體錯誤或 bug 弄壞？重算一次等於白做，Freivalds 用 O(n²) 驗證 O(n³) 的工作。
+**Based on:** [Randomization: Matrix Multiply, Quicksort](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/cb55cb123a557eed0738a1187a452c24_MIT6_046JS15_lec06.pdf) · **Read first:** [Divide & Conquer: Smarter Interval Scheduling, Master Theorem, Strassen’s Algorithm](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/7c15f31b5a1aa1991313d1b4544cc137_MIT6_046JS15_Recitation1.pdf), [Randomization: Matrix Multiply, Quicksort](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/cb55cb123a557eed0738a1187a452c24_MIT6_046JS15_lec06.pdf)
 
-`Matrix<Ring>` 是 `n × n` 的方陣，以值語意保存元素。`Ring` 是可以做 `+`、`-`、`*`、`==` 的環：`Ring{}` 是 0，`Ring(1)` 是 1，測試主要用 `std::uint64_t`（自然模 2⁶⁴）。
+> **Why this comes up in practice:** after you hand an expensive matrix computation to a GPU or an untrusted worker, how do you cheaply confirm that hardware faults or bugs didn't corrupt the result? Computing it again defeats the purpose; Freivalds checks O(n³) work in O(n²).
 
-## Stage 1 — Matrix 與直接相乘
+## Your task
 
-`Matrix(n)` 建立全 0 矩陣，`size()`、`m(i, j)`（0-based）、`operator==`。`multiply_naive(a, b)` 做 n³ 次乘法。尺寸不符時丟 `std::invalid_argument`。
+`Matrix<Ring>` is an `n × n` square matrix that stores its elements with value semantics. `Ring` is a ring that supports `+`, `-`, `*`, and `==`: `Ring{}` is 0 and `Ring(1)` is 1. The tests mostly use `std::uint64_t` (which naturally works modulo 2⁶⁴).
+
+You build the matrix type with the cubic product, then Strassen's algorithm, and finally Freivalds' randomized check of a claimed product.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Matrix and the direct product
+
+```cpp
+template <typename Ring>
+class Matrix {
+public:
+    explicit Matrix(std::size_t n);
+
+    std::size_t size() const;
+    Ring& operator()(std::size_t i, std::size_t j);
+    const Ring& operator()(std::size_t i, std::size_t j) const;
+
+    friend bool operator==(const Matrix&, const Matrix&);
+};
+
+template <typename Ring>
+Matrix<Ring> multiply_naive(const Matrix<Ring>& a, const Matrix<Ring>& b);
+```
+
+`Matrix(n)` creates an all-0 matrix (`n` may be 0), with `size()`, `m(i, j)` (0-based), and `operator==`, which returns `false` for matrices of different sizes instead of throwing. `multiply_naive(a, b)` performs n³ multiplications. Throw `std::invalid_argument` when the sizes don't match.
 
 ## Stage 2 — Strassen
 
-`multiply_strassen(a, b, cutoff)`：`n ≤ cutoff` 時改用 `multiply_naive`。`n` 不是 2 的冪次時，補 0 到下一個 2 的冪次，算完再切回來。`cutoff == 0` 時丟 `std::invalid_argument`。
+```cpp
+template <typename Ring>
+Matrix<Ring> multiply_strassen(const Matrix<Ring>& a, const Matrix<Ring>& b, std::size_t cutoff = 64);
+```
 
-- 每一層遞迴只能做 7 次子問題乘法，也就是 `n = 2^k`、`cutoff = 1` 時總乘法次數**剛好** `7^k`。
-- 下一層的矩陣比這一層小，Strassen 的七個子問題一定要在子矩陣上遞迴，不是自己算 8 個四分之一。
+`multiply_strassen(a, b, cutoff)`: switch to `multiply_naive` when `n ≤ cutoff`. When `n` is not a power of 2, pad with 0s up to the next power of 2, and trim the result back afterwards. Throw `std::invalid_argument` when `cutoff == 0` or when the sizes don't match.
 
-## Stage 3 — Freivalds 驗證
+- Each level of recursion may make only 7 subproblem multiplications; that is, with `n = 2^k` and `cutoff = 1`, the total number of multiplications is **exactly** `7^k`.
+- The next level's matrices are smaller than this level's: Strassen's seven subproblems must recurse on submatrices, rather than computing 8 quarter-size products yourself.
 
-`verify_product(a, b, c, rng, rounds)`：判斷 `a × b` 是否等於 `c`。
+## Stage 3 — Freivalds verification
 
-- 若等式成立，**一定**回傳 `true`。
-- 若不成立，每一輪至少有 1/2 機率回傳 `false`，所以回傳 `true` 的機率不超過 `2^{-rounds}`。
-- 每輪取隨機向量 `r ∈ {0,1}^n`，比較 `A(Br)` 和 `Cr`。每輪只能做 3 次矩陣乘向量，總乘法次數 `≤ 3·rounds·n²`。
+```cpp
+template <typename Ring, std::uniform_random_bit_generator Rng>
+bool verify_product(const Matrix<Ring>& a, const Matrix<Ring>& b, const Matrix<Ring>& c, Rng& rng,
+                    int rounds = 32);
+```
 
-Lecture 6 在 mod 2 下分析，這題改成 `std::uint64_t` 的 wrap-around；分析不需要改，只用到 `Dr` 和 `D(r + e_j)` 不可能同時為 0。
+`verify_product(a, b, c, rng, rounds)`: decide whether `a × b` equals `c`. Throw `std::invalid_argument` unless all three matrices have the same size.
 
-## 面試追問
+- If the equation holds, **always** return `true`.
+- If it doesn't, each round returns `false` with probability at least 1/2, so the probability of returning `true` is at most `2^{-rounds}`.
+- Each round draws a random vector `r ∈ {0,1}^n` and compares `A(Br)` with `Cr`. Each round may do only 3 matrix-vector products, for a total of `≤ 3·rounds·n²` multiplications.
 
-1. 為什麼 7 次遞迴能打敗 8 次？`T(n) = 7T(n/2) + Θ(n²)` 怎麼解？為什麼實務上都要設 cutoff？
-2. Freivalds 是 Monte Carlo 還是 Las Vegas？如果把 `r` 的每個分量都改成從更大的範圍均勻挑，誤判機率會怎麼變？
-3. 這類「驗證比計算便宜」的思路還能用在哪裡？（想想 Schwartz–Zippel，或你在 0201 看到的檢查方式。）
+Lecture 6 does the analysis mod 2, while this exercise uses the wrap-around of `std::uint64_t`. The analysis doesn't need to change, because it only uses the fact that `Dr` and `D(r + e_j)` can't both be 0.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why do 7 recursive calls beat 8? How do you solve `T(n) = 7T(n/2) + Θ(n²)`? Why does every practical implementation set a cutoff?
+2. Is Freivalds Monte Carlo or Las Vegas? If each component of `r` were drawn uniformly from a larger range, how would the error probability change?
+3. Where else does this "verifying is cheaper than computing" idea apply? (Think of Schwartz–Zippel, or the checks you saw in 0201.)

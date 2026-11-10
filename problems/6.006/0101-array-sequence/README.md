@@ -1,6 +1,6 @@
 ---
-title: Static Array 與 Array Sequence
-unit: 01 · Sequences（PS1）
+title: Static Array and Array Sequence
+unit: 01 · Sequences (PS1)
 source: 6.006 Lecture 1, Recitation 1-2
 pdf: materials/6.006/recitations/rec02.pdf
 read: materials/6.006/lectures/lec01.pdf, materials/6.006/lectures/lec02.pdf, materials/6.006/recitations/rec01.pdf
@@ -8,53 +8,124 @@ kind: code
 minutes: 70
 ---
 
-# 0101 · Static Array 與 Array Sequence
+# 0101 · Static Array and Array Sequence
 
-> **實務上為什麼會遇到**：`std::vector` 底層就是一段連續記憶體加上「長度」。在 RAM 模型裡，索引存取 O(1) 是因為位址可以算出來；而中間插入 O(n) 是因為後面的元素全部要搬。這題從最底層把這件事親手做一次。
+**Based on:** [Recitation 2 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/c08a3b63dfe5f6f6b32257d35f86ae63_MIT6_006S20_r02.pdf) · **Read first:** [Lecture 1: Introduction notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/477c78e0af2df61fa205bcc6cb613ceb_MIT6_006S20_lec1.pdf), [Lecture 2: Data Structures notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf), [Recitation 1 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/c6d8f06c6f11e3342633dec85498f551_MIT6_006S20_r01.pdf)
 
-自己管理記憶體，**不可使用 `std::vector`** 當底層容器。
+> **Why this comes up in practice:** underneath, `std::vector` is just a contiguous block of memory plus a "length." In the RAM model, indexed access is O(1) because the address can be computed, while inserting in the middle is O(n) because every element after it has to move. This exercise has you build that yourself, from the lowest level up.
 
-## Stage 1 — StaticArray（Rule of Five）
+## Your task
 
-`StaticArray<T>`：固定長度、擁有自身元素（`T` 可以 default-construct 與賦值）。
+Manage the memory yourself: **do not use `std::vector`** as the underlying container.
 
-| 操作 | 行為 |
+You build a fixed-length `StaticArray` that owns its elements, implement the Lecture 2 Sequence interface on top of it as `ArraySequence`, and finish with the first algorithm from Lecture 1.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — StaticArray (Rule of Five)
+
+```cpp
+template <typename T>
+class StaticArray {
+public:
+    explicit StaticArray(std::size_t n = 0);
+
+    ~StaticArray();
+
+    StaticArray(const StaticArray& other);
+    StaticArray& operator=(const StaticArray& other);
+
+    StaticArray(StaticArray&& other);             // should be noexcept once implemented
+    StaticArray& operator=(StaticArray&& other);  // should be noexcept once implemented
+
+    std::size_t size() const;
+
+    const T& get_at(std::size_t i) const;
+    void set_at(std::size_t i, T value);
+
+    T& operator[](std::size_t i);
+    const T& operator[](std::size_t i) const;
+
+    T* begin();
+    T* end();
+    const T* begin() const;
+    const T* end() const;
+};
+```
+
+`StaticArray<T>`: fixed length, and it owns its elements (`T` can be default-constructed and assigned).
+
+| Operation | Behavior |
 | --- | --- |
-| `explicit StaticArray(n)` | `n` 個 value-initialized 的元素（`int` 為 0） |
-| `size()` | 長度，O(1) |
-| `get_at(i)`、`set_at(i, x)` | O(1)；`i` 超出範圍丟 `std::out_of_range` |
-| `operator[]`（`const` 與非 `const`） | O(1)，不檢查範圍 |
-| `begin()` / `end()` | 指標即可（讓 range-for 能用） |
+| `explicit StaticArray(n)` | `n` value-initialized elements (0 for `int`) |
+| `size()` | The length, O(1) |
+| `get_at(i)`, `set_at(i, x)` | O(1); throw `std::out_of_range` if `i` is out of range |
+| `operator[]` (`const` and non-`const`) | O(1), no range check |
+| `begin()` / `end()` | Plain pointers are enough (so that range-for works) |
 
-資源管理：
+Resource management:
 
-- 解構子釋放所有元素。Copy 是深拷貝；copy assignment 要有 **strong guarantee**（元素複製丟例外時，原物件不受影響）。
-- Move 必須 O(1)、不動到任何元素（搶指標就好），`noexcept`，被搬走的物件 `size()` 為 0。
-- 自我賦值 `a = a` 必須正常。
+- The destructor frees every element. Copying is a deep copy; copy assignment must provide the **strong guarantee** (if copying an element throws an exception, the original object is unaffected).
+- Move must be O(1) and must not touch any element (just steal the pointer), it must be `noexcept`, and a moved-from object's `size()` is 0.
+- Self-assignment `a = a` must work correctly.
 
 ## Stage 2 — ArraySequence
 
-用 Stage 1 的 `StaticArray` 實作 Lecture 2 的 Sequence interface。陣列永遠剛好是滿的，所以每次新增或刪除都要**重新配置**並搬移元素：
+```cpp
+template <typename T>
+class ArraySequence {
+public:
+    ArraySequence();
+    explicit ArraySequence(std::span<const T> items);
 
-| 操作 | 行為 |
+    std::size_t size() const;
+    const T& get_at(std::size_t i) const;
+    void set_at(std::size_t i, T value);
+
+    void insert_at(std::size_t i, T value);
+    T delete_at(std::size_t i);
+
+    void insert_first(T value);
+    void insert_last(T value);
+    T delete_first();
+    T delete_last();
+
+    T* begin();
+    T* end();
+    const T* begin() const;
+    const T* end() const;
+};
+```
+
+Use Stage 1's `StaticArray` to implement the Sequence interface from Lecture 2. The array is always exactly full, so every insertion or deletion must **reallocate** and move the elements:
+
+| Operation | Behavior |
 | --- | --- |
-| `ArraySequence()` / `explicit ArraySequence(span<const T>)` | 空的 / 複製建構，O(n) |
-| `size()`、`get_at(i)`、`set_at(i, x)` | O(1)，超出範圍丟 `std::out_of_range` |
-| `insert_at(i, x)` | 在索引 `i` 之前插入，`0 ≤ i ≤ size()`，O(n) |
-| `delete_at(i)` | 刪除並回傳第 `i` 個元素，O(n) |
-| `insert_first` / `insert_last` / `delete_first` / `delete_last` | 用上面的操作組合 |
-| `begin()` / `end()` | 迭代 |
+| `ArraySequence()` / `explicit ArraySequence(span<const T>)` | Empty / copy-construct, O(n) |
+| `size()`, `get_at(i)`, `set_at(i, x)` | O(1); throw `std::out_of_range` when out of range |
+| `insert_at(i, x)` | Insert before index `i`, `0 ≤ i ≤ size()`, O(n) |
+| `delete_at(i)` | Delete and return element `i`, O(n) |
+| `insert_first` / `insert_last` / `delete_first` / `delete_last` | Built from the operations above |
+| `begin()` / `end()` | Iteration |
 
-`insert_at` 和 `delete_at` 要做到 strong guarantee：元素複製丟例外、或 index 不合法時，序列內容不變。`ArraySequence` 本身應該用不到自訂的解構子或 copy / move（Rule of Zero）。
+`insert_at` and `delete_at` must provide the strong guarantee: if copying an element throws an exception, or the index is invalid, the sequence's contents stay unchanged. `ArraySequence` itself should not need a custom destructor or copy / move operations (Rule of Zero).
 
-## Stage 3 — Lecture 1 的第一個演算法
+## Stage 3 — The first algorithm from Lecture 1
 
-`first_collision(records, key_of)`：依序檢查每筆資料，回傳 `(i, j)`，其中 `j` 是**最小的**「前面有資料具有相同 key」的索引，`i` 是其中最早的那一筆；沒有重複時回傳 `std::nullopt`。
+```cpp
+template <typename Record, typename KeyOf>
+std::optional<std::pair<std::size_t, std::size_t>> first_collision(std::span<const Record> records,
+                                                                   KeyOf key_of);
+```
 
-用 Stage 1 的 `StaticArray` 當紀錄，O(n²) 即可（用 sort 或 hashing 是之後的章節）。
+`first_collision(records, key_of)`: check the records in order and return `(i, j)`, where `j` is the **smallest** index whose record has the same key as some earlier record, and `i` is the earliest of those earlier records; when there are no duplicates, return `std::nullopt`.
 
-## 面試追問
+Use Stage 1's `StaticArray` to keep a record of what you have seen. O(n²) is fine (sorting and hashing come in later chapters).
 
-1. `std::vector` 的 `operator[]` 為什麼不做範圍檢查，`at()` 要做？對效能的影響是什麼？
-2. 為什麼這裡的 `insert_at` 是 O(n)，換成 dynamic array（0103）就能讓尾端插入攤提 O(1)？差別在哪裡？
-3. 用歸納法說明 `first_collision` 的迴圈是正確的（提示：k 筆之內有沒有碰撞）。
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does `std::vector`'s `operator[]` skip the range check while `at()` performs one? What is the impact on performance?
+2. Why is `insert_at` O(n) here, while switching to a dynamic array (0103) makes insertion at the end amortized O(1)? Where does the difference come from?
+3. Use induction to show that the loop in `first_collision` is correct (hint: whether there is a collision among the first k records).

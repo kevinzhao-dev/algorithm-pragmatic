@@ -1,55 +1,126 @@
 ---
-title: 用 Compiler Instrumentation 寫 Function Profiler
-unit: 09 · Dynamic Analysis（HW7）
-source: 6.172 HW7 §2 Checkoff 1–5（函式覆蓋率與 profiling）
+title: Writing a Function Profiler with Compiler Instrumentation
+unit: 09 · Dynamic Analysis (HW7)
+source: 6.172 HW7 §2 Checkoff 1–5 (function coverage and profiling)
 pdf: materials/6.172/homework/hw07/handout.pdf
 kind: code
 minutes: 90
 ---
 
-# 0911 · 用 Compiler Instrumentation 寫 Function Profiler
+# 0911 · Writing a Function Profiler with Compiler Instrumentation
 
-> **實務上為什麼會遇到**：perf 能看 sample，但有些問題要精確到「這個函式到底被呼叫幾次」，或者要在每次呼叫時做事（coverage、allocation attribution、tracing）。這時候就要在編譯時插 hook，LLVM XRay、gcov、各種 sanitizer 走的都是這條路。
+**Original problem:** [HW7: Dynamic Analysis Tools](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/1ca096c3f8a039f3b782479c1deca8a4_MIT6_172F18hw7.pdf)
 
-作業用的 CSI 工具鏈在 Apple clang 上沒有。這裡用 clang 內建的 `-finstrument-functions`：編譯器會在每個被 instrument 的函式進入和離開時呼叫下面兩個 hook，你提供它們的實作：
+> **Why this comes up in practice:** perf gives you samples, but some questions need an exact answer, such as "how many times is this function really called", or need something done on every call (coverage, allocation attribution, tracing). That's when you insert hooks at compile time; LLVM XRay, gcov, and all the sanitizers take this route.
+
+## Original problem
+
+6.172 HW7 §2 is a recitation exercise in CSI, the compiler-instrumentation framework of the Tapir/LLVM compiler. A CSI tool is a library that defines hooks: the compiler inserts calls to them throughout the program under test (on function entry and exit, basic-block entry, memory accesses, and so on), and any hook the tool leaves undefined is optimized away. Every instrumented object gets a CSI ID, a dense integer within its category, so a tool can keep its data in plain arrays, and forensic tables map IDs to static information such as function names and source locations. You complete a function-analysis tool in `func-analysis.c`:
+
+- Checkoff 1: add global variables that record how many times each function runs, and initialize them in the `__csi_init` and `__csi_unit_init` hooks.
+- Checkoff 2: add a `report` function that uses the forensic tables to print every function's name and execution count, and register it in `__csi_init` to run when the program exits.
+- Checkoff 3: decide which IR-object hooks let you observe each function execution, and implement them to count executions.
+- Checkoff 4: build the tool and use it to instrument the provided `fib_serial` program, then run it.
+- Checkoff 5: instrument `bzip2` with the tool, compress a test file, and show a TA that the counts are right.
+- Final checkoff (time permitting): turn the coverage tool into a profiler that records how much of the running time is spent in each function, try it on fib and on bzip2, and make sure it doesn't over-count the time spent in recursive functions.
+
+## Your task
+
+The CSI toolchain the homework uses doesn't exist for Apple clang. Instead, this exercise uses clang's built-in `-finstrument-functions`: the compiler calls the two hooks below on entry to and exit from every instrumented function, and you provide their implementations:
 
 ```cpp
 extern "C" void __cyg_profile_func_enter(void* this_fn, void* call_site);
 extern "C" void __cyg_profile_func_exit(void* this_fn, void* call_site);
 ```
 
-`support/workload.cpp` 是受測程式，只有它用 `-finstrument-functions` 編譯（看 `practice.cmake`）。Hook 和 `profiler::` 介面寫在這個資料夾的 `profiler.cpp`。`this_fn` 就是函式位址，也就是測試裡的 `&workload::fib`，可以直接當 key。
+`support/workload.cpp` is the program under test, and it is the only file compiled with `-finstrument-functions` (see `practice.cmake`). Write the hooks and the `profiler::` interface in `profiler.cpp` in this folder. `this_fn` is the function's address, the same as `&workload::fib` in the tests, so you can use it directly as a key.
 
-Hook 所在的檔案**沒有**被 instrument，所以在 hook 裡用 `std::unordered_map` 不會遞迴呼叫 hook，放心用。
+The file that holds the hooks is **not** instrumented, so using `std::unordered_map` inside a hook won't call the hooks recursively; go ahead and use it.
 
-測試是單執行緒的，不需要處理 race。
+The tests are single-threaded, so you don't need to handle races.
 
-## Stage 1 — 函式覆蓋率（Checkoff 1、3、4）
+Instead of a CSI tool in C that prints a report at exit, you build a C++ profiler with a small API that the tests query directly: per-function call counts, a demangled report, inclusive and exclusive time, and a growth estimate from call counts.
 
-`start()` 清掉資料並開始記錄，`stop()` 停止記錄（資料保留可查）；`calls(fn)` 回傳該函式在這次錄製中被進入的次數。
+Each stage lists the declarations it adds, copied from `solution.hpp`.
 
-## Stage 2 — 報表（Checkoff 2）
+## Stage 1 — Function coverage (Checkoff 1, 3, 4)
 
-`report()` 回傳這次錄製裡**真的被呼叫過**的函式，依名稱排序，名稱要 demangle（例如 `workload::fib(int)`）。提示：`dladdr` 加 `abi::__cxa_demangle`。
+```cpp
+namespace profiler {
 
-## Stage 3 — Profiling（Checkoff，time permitting）
+void start();
+void stop();
+std::uint64_t calls(const void* function);
 
-`stats(fn)` 回傳 `FunctionStats`：
+}  // namespace profiler
+```
 
-- `calls`：進入次數。
-- `exclusive_ticks`：花在這個函式本身（不含 callee）的時間。
-- `inclusive_ticks`：這個函式的 outermost activation 從進入到離開的總時間。遞迴函式不可重複累加：`f` 在 `f` 裡被呼叫時，內層那段時間不能算兩次（作業特別提醒的陷阱）。
+`start()` clears the data and starts recording, and `stop()` stops recording (the data stays available for queries). `calls(fn)` returns the number of times the function was entered during this recording.
 
-時間來源用 `set_clock(clock)` 注入（`Clock` 是回傳 `std::uint64_t` 的函式指標；傳 `nullptr` 恢復預設的 `std::chrono::steady_clock` 奈秒）。測試用假的虛擬時鐘，所以結果是精確的整數。
+## Stage 2 — Report (Checkoff 2)
 
-## Stage 4 — 從呼叫次數估計複雜度
+```cpp
+namespace profiler {
 
-`estimate_growth(function, run, sizes)`：對每個 `n ∈ sizes` 錄製一次 `run(n)`，收集 `function` 的呼叫次數，用 `_shared/08_ols.hpp` 的 `practice::ols::classify_growth` 回傳複雜度分類。
+struct ReportLine {
+    std::string name;
+    std::uint64_t calls = 0;
+    friend bool operator==(const ReportLine&, const ReportLine&) = default;
+};
 
-測試會把它用在線性、平方、merge sort 與 fib 上。
+std::vector<ReportLine> report();
 
-## 面試追問
+}  // namespace profiler
+```
 
-1. CSI 能拿到 basic block 和記憶體存取，而 `-finstrument-functions` 只有函式進出。各自適合做什麼工具？
-2. Instrumentation 會改變被測程式的行為（時間、inlining）。Hook 的成本要怎麼量？（作業 Write-up 2）
-3. 函式因為 exception 離開時，`__cyg_profile_func_exit` 不一定會被呼叫。你的 shadow stack 要怎麼處理？
+`report()` returns the functions that were **actually called** during this recording, sorted by name, with demangled names (for example `workload::fib(int)`). Hint: `dladdr` plus `abi::__cxa_demangle`.
+
+## Stage 3 — Profiling (Checkoff, time permitting)
+
+```cpp
+namespace profiler {
+
+struct FunctionStats {
+    std::uint64_t calls = 0;
+    std::uint64_t inclusive_ticks = 0;
+    std::uint64_t exclusive_ticks = 0;
+};
+
+using Clock = std::uint64_t (*)();
+
+void set_clock(Clock clock);
+FunctionStats stats(const void* function);
+
+}  // namespace profiler
+```
+
+`stats(fn)` returns `FunctionStats`:
+
+- `calls`: the number of entries.
+- `exclusive_ticks`: the time spent in the function itself (excluding its callees).
+- `inclusive_ticks`: the total time from entry to exit of the function's outermost activations. Recursive functions must not be double-counted: when `f` is called inside `f`, the inner stretch of time must not be counted twice (the pitfall the homework specifically warns about).
+
+Inject the time source with `set_clock(clock)` (`Clock` is a pointer to a function returning `std::uint64_t`; passing `nullptr` restores the default, `std::chrono::steady_clock` in nanoseconds). The tests use a fake virtual clock, so the results are exact integers.
+
+## Stage 4 — Estimating complexity from call counts
+
+```cpp
+namespace profiler {
+
+practice::ols::Growth estimate_growth(const void* function, void (*run)(int),
+                                      std::span<const int> sizes);
+
+}  // namespace profiler
+```
+
+`estimate_growth(function, run, sizes)`: for each `n ∈ sizes`, record one run of `run(n)` and collect the call count of `function`, then return the complexity class that `practice::ols::classify_growth` from `_shared/08_ols.hpp` gives.
+
+The tests apply it to linear, quadratic, merge sort, and fib workloads.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. CSI can see basic blocks and memory accesses, while `-finstrument-functions` sees only function entry and exit. What kinds of tools is each suited for?
+2. Instrumentation changes the behavior of the program under test (timing, inlining). How do you measure the cost of the hooks? (Homework Write-up 2)
+3. When a function exits because of an exception, `__cyg_profile_func_exit` may not be called. How should your shadow stack handle that?

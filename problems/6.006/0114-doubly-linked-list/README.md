@@ -1,6 +1,6 @@
 ---
-title: Doubly Linked List（O(1) 區段搬移）
-unit: 01 · Sequences（PS1）
+title: Doubly Linked List (O(1) range moves)
+unit: 01 · Sequences (PS1)
 source: 6.006 PS1 Problem 1-4
 pdf: materials/6.006/psets/ps1/questions.pdf
 answer: materials/6.006/psets/ps1/solutions.pdf
@@ -11,52 +11,121 @@ minutes: 75
 
 # 0114 · Doubly Linked List
 
-> **實務上為什麼會遇到**：LRU cache、排程器的 ready queue、編輯器的行緩衝，都需要「手上已經握著節點時，O(1) 把它（或一整段）搬走」。這正是 `std::vector` 做不到、而 linked list 唯一值得存在的理由。
+**Original problem:** [Problem Set 1 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/dc56bd1995baf20cfcdd3fbabdd2dbc9_MIT6_006S20_ps1-questions.pdf) · **Read first:** [Lecture 2: Data Structures notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf), [Recitation 2 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/c08a3b63dfe5f6f6b32257d35f86ae63_MIT6_006S20_r02.pdf)
 
-在 `solution.hpp` 實作一個擁有自身節點的雙向鏈結串列。**不可以維護長度**：一旦 O(1) 搬走一整段，就沒有辦法同步更新長度。
+> **Why this comes up in practice:** an LRU cache, a scheduler's ready queue and an editor's line buffer all need to move a node (or a whole run of nodes) out in O(1) once you already hold it. `std::vector` can't do that, and it is the only reason a linked list is still worth having.
 
-一次只看一關，做完再往下讀。
+## Original problem
 
-## Stage 1 — 兩端操作與所有權
+6.006 PS1 Problem 1-4 extends the singly linked list from Lecture 2 into a doubly linked list. Each node keeps a `prev` and a `next` pointer, the list keeps both its `head` and its `tail`, and the list must not store its length.
 
-| 操作 | 行為 | 複雜度 |
+- (a) Describe O(1) algorithms for `insert_first(x)`, `insert_last(x)`, `delete_first()` and `delete_last()`.
+- (b) Given nodes x1 and x2 of a list L, where x1 comes before x2, describe an O(1) algorithm that removes every node from x1 through x2, inclusive, and returns them as a new doubly linked list.
+- (c) Given a node x of a list L1 and a second list L2, describe an O(1) algorithm that splices L2 into L1 right after x. Afterwards L1 holds the items of both lists and L2 is empty.
+- (d) Implement all of the above in the problem set's Python code template, without changing its node class.
+
+## Your task
+
+Implement a doubly linked list in `solution.hpp` that owns its nodes. **Do not maintain a length:** once a whole range can move out in O(1), there is no way to keep a length up to date. Stage 4 then uses the list to build an LRU cache, which the original problem doesn't have.
+
+Each stage lists the declarations it adds, copied from `solution.hpp`.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Operations at both ends, and ownership
+
+```cpp
+template <typename T>
+class DoublyLinkedList {
+public:
+    struct Node {
+        explicit Node(T value) : item(std::move(value)) {}
+        T item;
+        Node* prev = nullptr;
+        Node* next = nullptr;
+    };
+
+    DoublyLinkedList() = default;
+    ~DoublyLinkedList();
+    DoublyLinkedList(const DoublyLinkedList&) = delete;
+    DoublyLinkedList& operator=(const DoublyLinkedList&) = delete;
+
+    bool empty() const;  // provided
+    Node* head() const;  // provided
+    Node* tail() const;  // provided
+
+    Node* insert_first(T value);
+    Node* insert_last(T value);
+    T delete_first();
+    T delete_last();
+};
+```
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `insert_first(v)` / `insert_last(v)` | 插入並回傳新節點 | O(1) |
-| `delete_first()` / `delete_last()` | 移除並回傳值；串列為空時丟 `std::out_of_range` | O(1) |
-| `head()` / `tail()` / `empty()` | 空串列時 `head()`、`tail()` 為 `nullptr` | O(1) |
-| 解構子 | 釋放所有節點，不可使用遞迴（百萬節點會把 stack 撐爆） | O(n) |
+| `insert_first(v)` / `insert_last(v)` | Insert and return the new node | O(1) |
+| `delete_first()` / `delete_last()` | Remove and return the value; throw `std::out_of_range` if the list is empty | O(1) |
+| `head()` / `tail()` / `empty()` | `head()` and `tail()` are `nullptr` for an empty list | O(1) |
+| Destructor | Free every node without recursion (a million nodes would overflow the stack) | O(n) |
 
-要處理好的邊界：只剩一個節點時刪除，`head` 和 `tail` 都要回到 `nullptr`。
+Edge case to get right: deleting the only remaining node must reset both `head` and `tail` to `nullptr`.
 
-## Stage 2 — 切出一段
+## Stage 2 — Cutting out a range
 
-`remove(first, last)`：`first` 和 `last` 是本串列的節點，`first` 在 `last` 之前（或相同）。把這段（含兩端）從串列切走，**O(1)** 回傳成一條新的串列。節點本身要被搬走，不可以複製。
+```cpp
+// in class DoublyLinkedList<T>
+DoublyLinkedList remove(Node* first, Node* last);
+```
 
-邊界：切掉開頭、切掉結尾、切掉整條、只切一個節點。
+`remove(first, last)`: `first` and `last` are nodes of this list, and `first` comes before `last` (or is the same node). Cut that range, both ends included, out of the list and return it as a new list in **O(1)**. The nodes themselves must move; do not copy them.
 
-## Stage 3 — 接回去
+Edge cases: cutting from the head, cutting from the tail, cutting the whole list, and cutting a single node.
 
-`splice(after, other)`：把 `other` 的全部節點接到本串列節點 `after` 的後面，**O(1)**。完成後 `other` 變成空串列。
+## Stage 3 — Splicing back in
 
-邊界：`other` 是空的、`after` 是目前的 `tail`。
+```cpp
+// in class DoublyLinkedList<T>
+void splice(Node* after, DoublyLinkedList& other);
+DoublyLinkedList(DoublyLinkedList&& other);             // should be noexcept once implemented
+DoublyLinkedList& operator=(DoublyLinkedList&& other);  // should be noexcept once implemented
+```
 
-同時補上 move constructor 與 move assignment（Stage 2 回傳新串列時就會用到）。
+`splice(after, other)`: attach all of `other`'s nodes right after node `after` of this list, in **O(1)**. Afterwards `other` is empty.
 
-## Stage 4 — 實務延伸：LRU Cache
+Edge cases: `other` is empty, and `after` is the current `tail`.
 
-用你的串列加上 `std::unordered_map` 做出 `LruCache<K, V>`：
+Also add a move constructor and move assignment (Stage 2 already needs them to return a new list).
 
-- `explicit LruCache(std::size_t capacity)`，`capacity` 至少為 1。
-- `std::optional<V> get(const K&)`：存在時回傳值，並把它標成最近使用。
-- `std::optional<K> put(K, V)`：寫入或覆蓋，也算最近使用。若因此淘汰了某個 key，回傳被淘汰的 key，否則回傳 `std::nullopt`。
-- `std::size_t size() const`。
+## Stage 4 — Real-world extension: LRU Cache
 
-`get` 和 `put` 都要平均 O(1)。
+```cpp
+template <typename K, typename V>
+class LruCache {
+public:
+    explicit LruCache(std::size_t capacity);
+    std::optional<V> get(const K& key);
+    std::optional<K> put(K key, V value);
+    std::size_t size() const;
+};
+```
 
-## 面試追問
+Use your list plus `std::unordered_map` to build `LruCache<K, V>`:
 
-做完之後，不看程式回答：
+- `explicit LruCache(std::size_t capacity)`, where `capacity` is at least 1.
+- `std::optional<V> get(const K&)`: if the key exists, return its value and mark it as most recently used.
+- `std::optional<K> put(K, V)`: insert or overwrite; this also counts as a use. If it evicts a key, return the evicted key; otherwise return `std::nullopt`.
+- `std::size_t size() const`.
 
-1. 為什麼這個串列不能有 O(1) 的 `size()`？如果需求堅持要有，你會犧牲哪個操作？
-2. `std::list::splice` 在 C++11 之後的複雜度規定是什麼？跟你的設計取捨有什麼關係？
-3. 把 `LruCache` 改成多執行緒安全：一把大鎖的瓶頸在哪？`get` 為什麼也需要寫入鎖？
+Both `get` and `put` must be O(1) on average.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why can't this list have an O(1) `size()`? If the requirements insisted on one, which operation would you give up?
+2. What complexity does the standard require of `std::list::splice` since C++11? How does that relate to your design trade-offs?
+3. Make `LruCache` thread-safe: where is the bottleneck with one big lock? Why does `get` also need a write lock?
+
+---
+
+**Official solution:** [Problem Set 1 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/10e4e3444c1bde4c662a47a8f14dadd3_MIT6_006S20_ps1-solutions.pdf). Read it after you finish.

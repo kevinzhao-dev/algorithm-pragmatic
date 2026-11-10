@@ -1,6 +1,6 @@
 ---
-title: Merkle Tree（驗證儲存與新鮮度）
-unit: 10 · Distributed Algorithms（PS10）
+title: Merkle Tree (verified storage and freshness)
+unit: 10 · Distributed Algorithms (PS10)
 source: 6.046J Recitation 11, Lecture 21
 pdf: materials/6.046j/recitations/rec11.pdf
 read: materials/6.046j/recitations/rec11.pdf, materials/6.046j/lectures/lec21.pdf
@@ -10,36 +10,73 @@ minutes: 110
 
 # 1022 · Merkle Tree
 
-> **實務上為什麼會遇到**：把資料放在不受信任的儲存（S3、遠端磁碟、區塊鏈節點）時，你要驗證內容沒被竄改、而且**不是舊版本**。Certificate Transparency、Bitcoin 的 SPV、dm-verity 都是同一個結構：本地只存一個 root hash。
+**Based on:** [Cryptography: More Primitives](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/c9057a2600a14987be5eea240c10fe45_MIT6_046JS15_Recitation11.pdf) · **Read first:** [Cryptography: More Primitives](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/c9057a2600a14987be5eea240c10fe45_MIT6_046JS15_Recitation11.pdf), [Cryptography: Hash Functions](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/6741d65be662edac7c169c4081b3bd9a_MIT6_046JS15_lec21.pdf)
 
-`support/sha256.hpp`（已提供）有 `sha256::hash(std::string_view)` 與 `sha256::Digest`（`std::array<unsigned char, 32>`）。`sha256::calls()` 計算呼叫次數，測試用它確認 update 真的是 O(log n)。
+> **Why this comes up in practice:** when you keep data in untrusted storage (S3, a remote disk, a blockchain node), you need to verify that the content hasn't been tampered with and **is not an old version**. Certificate Transparency, Bitcoin's SPV, and dm-verity all use the same structure: locally you store just one root hash.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — 建樹
+`support/sha256.hpp` (provided) has `sha256::hash(std::string_view)` and `sha256::Digest` (`std::array<unsigned char, 32>`). `sha256::calls()` counts the calls, and the tests use it to confirm that an update really is O(log n).
 
-規格（必須完全照做，測試會比對 root）：
+Following Recitation 11 and Lecture 21, you build a Merkle tree with membership proofs and logarithmic updates, then a client that reads and writes through a server it doesn't trust.
 
-- `Digest hash_leaf(std::string_view block)`：`SHA256(0x00 || block)`。
-- `Digest hash_node(const Digest& l, const Digest& r)`：`SHA256(0x01 || l || r)`。
-- `Digest hash_empty()`：`SHA256(0x02)`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`MerkleTree(std::vector<std::string> blocks)`：`n = blocks.size() ≥ 1`。把葉子補到 `cap`（`≥ n` 的最小 2 的冪），多出來的葉子用 `hash_empty()`。`Digest root() const`、`std::size_t size() const`（原始 `n`）。
+Read one stage at a time.
 
-## Stage 2 — 成員證明
-
-`std::vector<Digest> proof(std::size_t index) const`：從葉到根的兄弟節點（長度 `⌈lg cap⌉`，`cap = 1` 時長度 0）。
-
-`bool verify_proof(const Digest& root, std::size_t n, std::size_t index, std::string_view block, std::span<const Digest> proof)`：純函式，不需要整棵樹。`index >= n` 或 proof 長度不對要回傳 `false`。
-
-## Stage 3 — 更新
-
-`void update(std::size_t index, std::string block)`：只重算路徑上的節點。每次呼叫 `sha256::hash` 的次數不超過 `lg cap + 2`。
-
-## Stage 4 — 實務延伸：在不受信任的伺服器上讀寫
+## Stage 1 — Building the tree
 
 ```cpp
-class UntrustedServer {   // 測試提供實作，可能說謊
+using Digest = sha256::Digest;
+
+Digest hash_leaf(std::string_view block);
+Digest hash_node(const Digest& left, const Digest& right);
+Digest hash_empty();
+
+class MerkleTree {
+public:
+    explicit MerkleTree(std::vector<std::string> blocks);
+
+    std::size_t size() const;
+    Digest root() const;
+};
+```
+
+The specification (follow it exactly; the tests compare roots):
+
+- `Digest hash_leaf(std::string_view block)`: `SHA256(0x00 || block)`.
+- `Digest hash_node(const Digest& l, const Digest& r)`: `SHA256(0x01 || l || r)`.
+- `Digest hash_empty()`: `SHA256(0x02)`.
+
+`MerkleTree(std::vector<std::string> blocks)`: `n = blocks.size() ≥ 1`. Pad the leaves up to `cap` (the smallest power of 2 that is `≥ n`), using `hash_empty()` for the extra leaves. `Digest root() const` and `std::size_t size() const` (the original `n`).
+
+## Stage 2 — Membership proofs
+
+```cpp
+bool verify_proof(const Digest& root, std::size_t n, std::size_t index,
+                  std::string_view block, std::span<const Digest> proof);
+
+// in class MerkleTree
+std::vector<Digest> proof(std::size_t index) const;
+```
+
+`std::vector<Digest> proof(std::size_t index) const`: the siblings along the path from the leaf to the root (length `⌈lg cap⌉`, and length 0 when `cap = 1`).
+
+`bool verify_proof(const Digest& root, std::size_t n, std::size_t index, std::string_view block, std::span<const Digest> proof)`: a pure function that doesn't need the whole tree. It must return `false` when `index >= n` or the proof has the wrong length.
+
+## Stage 3 — Updates
+
+```cpp
+// in class MerkleTree
+void update(std::size_t index, std::string block);
+```
+
+`void update(std::size_t index, std::string block)`: recompute only the nodes on the path. Each call makes at most `lg cap + 2` calls to `sha256::hash`.
+
+## Stage 4 — Real-world extension: reading and writing on an untrusted server
+
+```cpp
+class UntrustedServer {   // the tests provide implementations, which may lie
 public:
     virtual ~UntrustedServer() = default;
     virtual std::string get_block(std::size_t i) const = 0;
@@ -56,12 +93,16 @@ public:
 };
 ```
 
-Client 只信任自己手上的 root（O(1) 的 trusted storage）。`read` 要驗證 server 回傳的 block 和 proof，否則丟 `TamperDetected`；`write` 也要先驗證舊 block 的 proof，用同一條 proof 算出新 root，再把新 block 交給 server；驗證失敗時 root 不可改變。
+The client trusts only the root it holds (O(1) trusted storage). `read` must verify the block and proof that the server returns, and throw `TamperDetected` otherwise. `write` must also first verify the proof of the old block, compute the new root from that same proof, and only then hand the new block to the server; if verification fails, `write` also throws `TamperDetected`, and the root must not change.
 
-（這解決了 recitation 提到的 freshness：攻擊者重放舊版本會對不上新的 root。）
+The tests also count hashes: with n = 4096, a `read` may make at most ⌈lg n⌉ + 2 calls to `sha256::hash` and a `write` at most 3⌈lg n⌉ + 6. These counts include the honest server's calls to your own `MerkleTree::proof` and `update`, so `proof()` must return stored digests without hashing, and `write` verifies only once.
 
-## 面試追問
+(This solves the freshness problem from the recitation: an attacker who replays an old version won't match the new root.)
 
-1. 為什麼 leaf 和 node 要用不同的前綴（domain separation）？少了前綴會有什麼攻擊？
-2. 為什麼要把 proof 長度跟 `n` 綁定？如果 verifier 不知道 `n` 會怎樣？
-3. Merkle tree 和直接存 n 個 hash、或存一個大 hash，三種做法的 trusted storage／驗證時間／更新時間各是多少？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why do leaves and internal nodes use different prefixes (domain separation)? What attack becomes possible without them?
+2. Why tie the proof length to `n`? What happens if the verifier doesn't know `n`?
+3. Compare a Merkle tree with storing n hashes directly or storing one big hash: what are the trusted storage, verification time, and update time of each of the three approaches?

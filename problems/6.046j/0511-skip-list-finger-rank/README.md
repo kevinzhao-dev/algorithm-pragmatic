@@ -1,6 +1,6 @@
 ---
-title: Skip List 的 Finger Search 與 Rank
-unit: 05 · Skip Lists、Hashing 與 DP（PS5）
+title: Skip List Finger Search and Rank
+unit: 05 · Skip Lists, Hashing, and DP (PS5)
 source: 6.046J PS5 Problem 5-1
 pdf: materials/6.046j/psets/ps05/questions.pdf
 answer: materials/6.046j/psets/ps05/solutions.pdf
@@ -9,50 +9,127 @@ kind: code
 minutes: 210
 ---
 
-# 0511 · Skip List 的 Finger Search 與 Rank
+# 0511 · Skip List Finger Search and Rank
 
-> **實務上為什麼會遇到**：查詢常常有區域性：翻到下一頁、看隔壁的排名、時間序列往前走幾筆。從頭搜尋要 O(log n)，手上已經握著附近的節點時，成本只該和距離有關。
+**Original problem:** [Problem Set 5](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/45952953cb13d077bd35d4397d67fa7c_MIT6_046JS15_pset5.pdf) · **Read first:** [Randomization: Skip Lists](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/14fe095781943ff9bd485e6e263b48f7_MIT6_046JS15_lec07.pdf)
 
-把 [`0501`](../0501-skip-list/README.md) 的 skip list 擴充成 `IndexedSkipList<Key>`：每一層都是雙向串列，並記錄每條連結跨過多少個第 0 層節點。`Node` 的內部由你決定，只需要公開 `key()`。節點指標在該節點被刪除之前都必須有效。
+> **Why this comes up in practice:** queries often have locality: turning to the next page, looking at the neighboring rank, stepping a few records forward in a time series. A search from the head costs O(log n), but when you already hold a nearby node, the cost should depend only on the distance.
 
-`m = 1 + |rank(x) − rank(目標)|`。Stage 1 和 Stage 3 的查詢都要 O(lg m)，跟 `n` 無關。
+## Original problem
 
-## 成本模型
+6.046J PS5 Problem 5-1 ("New Operations for Skip Lists") is about using skip lists, possibly augmented, for queries whose answer lies near a node you already hold. FINGER-SEARCH(x, k) receives a node x and a key k, and returns the node y that holds k (you may assume k is present); it should be fast when x and y are close together.
 
-`steps()`：累積 `finger_search`、`rank`、`at`、`rank_search` 走過的連結數，換層也算一步。`insert`、`erase`、`find` 不用計。
+- (a) Write pseudocode for FINGER-SEARCH(x, k) on a skip list with distinct keys, where x is a node of the level-0 list and the answer y is returned from the level-0 list. With m = 1 + |rank(x.key) − rank(k)|, where rank is a key's index in the sorted order of the set at the time of the call, it must take O(lg m) steps with high probability with respect to m: for every positive integer α, it finishes in O(lg m) time with probability at least 1 − 1/m^α, with a constant that may depend on α. Prove this bound. You may assume that every level begins with −∞ and ends with +∞.
+- (b) RANK-SEARCH(x, r) receives a node x and a positive integer r, and returns the node whose key has rank rank(x) + r (you may assume it exists). Decide what extra information the nodes store so that rank search can be fast, and show that maintaining it keeps SEARCH, INSERT, and DELETE within their usual high-probability bounds.
+- (c) Write pseudocode for RANK-SEARCH(x, r) under the same assumptions as part (a). It must take O(lg m) steps with high probability, in the same sense, for m = r + 1. Prove this bound.
 
-## Stage 1 — 雙向串列與 Finger Search
+## Your task
 
-基本操作：`insert(key)` 回傳新節點（已存在時回傳 `nullptr`）、`erase(key)`、`find(key)`、`first()`、`next(node)`、`prev(node)`、`size()`、`empty()`。走到盡頭回傳 `nullptr`。解構子不可遞迴。
+Extend the skip list from [`0501`](../0501-skip-list/README.md) into `IndexedSkipList<Key>`: every level is a doubly linked list, and every link records how many level-0 nodes it spans. The inside of `Node` is up to you; it only has to expose `key()`. A node pointer must stay valid until that node is deleted.
 
-`finger_search(from, key)`：從 `from` 出發找 `key`，**左右兩個方向都要支援**，不存在時回傳 `nullptr`。
+`m = 1 + |rank(x) − rank(target)|`. The queries in Stage 1 and Stage 3 must both take O(lg m), independent of `n`.
 
-做法分兩段：先往上爬，同時往目標方向走，直到再往上就會超過目標；再往目標走並逐層下降。測試用 `Counted` 量比較次數。
+Stage 1 is part (a), Stage 2 is part (b), and Stage 3 is part (c). Unlike the original, searches must handle keys that are absent and jumps in either direction, and Stage 4 builds a sliding median on top.
 
-## Stage 2 — 用寬度支援排名
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-每條連結多存一個寬度（這條連結跨過多少個第 0 層節點），`insert` 和 `erase` 都要維持正確，複雜度不變。
+## Cost model
 
-- `rank(node)`：節點的 0-based 排名，O(log n)。
-- `at(index)`：回傳第 `index` 個節點，超出範圍回傳 `nullptr`，O(log n)。
+`steps()`: the total number of links followed by `finger_search`, `rank`, `at`, and `rank_search`, where moving to another level also counts as one step. `insert`, `erase`, and `find` don't need to be counted.
 
-## Stage 3 — Rank Search
+## Stage 1 — Doubly linked levels and finger search
 
-`rank_search(from, delta)`：回傳排名是 `rank(from) + delta` 的節點，`delta` 可正可負，`delta == 0` 回傳 `from`，超出範圍回傳 `nullptr`。**O(lg m)**，`m = |delta| + 1`，所以不能先呼叫 `rank` 再 `at`。
+```cpp
+template <typename Key>
+class IndexedSkipList {
+public:
+    class Node {
+    public:
+        const Key& key() const;
+    };
 
-## Stage 4 — 實務延伸：滑動中位數
+    explicit IndexedSkipList(std::uint64_t seed = 6046);
 
-`SlidingMedian(seed)`：維護一個依到達順序的視窗。
+    ~IndexedSkipList();  // free every node, iteratively
 
-- `push(value)`：加入新值，允許重複。
-- `pop()`：移除最舊的值，空的時候丟 `std::out_of_range`。
-- `median()`：回傳排名 `(n−1)/2` 的值（偶數取較小的），空的時候回傳 `std::nullopt`。
-- `size()`、`steps()`：`steps()` 回傳內部串列累積的步數。
+    IndexedSkipList(const IndexedSkipList&) = delete;
+    IndexedSkipList& operator=(const IndexedSkipList&) = delete;
 
-中位數每次最多移動一格，所以要握著目前中位數的節點，用 `rank_search` 移動。每次更新的平均步數要是常數，每次都從頭 `at` 會被測試擋下。
+    std::size_t size() const;
+    bool empty() const;
+    Node* first() const;
+    Node* next(const Node* node) const;
+    Node* prev(const Node* node) const;
+    Node* find(const Key& key) const;
+    Node* insert(Key key);
+    bool erase(const Key& key);
+    Node* finger_search(Node* from, const Key& key) const;
 
-## 面試追問
+    // Cost model used by the tests: links followed plus level changes.
+    std::uint64_t steps() const;
+};
+```
 
-1. 為什麼 finger search 的上升階段高度以 O(lg m) 為限？和一般 skip list 的 O(lg n) 分析差在哪？（提示：範圍內只有 `m` 個節點。）
-2. 寬度怎麼在插入時更新？為什麼刪除時只要走過的路徑就夠了？
-3. B-tree 能不能做到一樣的 finger search？如果要並行，skip list 和 B-tree 哪個比較適合？
+The basic operations: `insert(key)` returns the new node (or `nullptr` if the key already exists), plus `erase(key)`, `find(key)`, `first()`, `next(node)`, `prev(node)`, `size()`, and `empty()`. Walking off either end returns `nullptr`. The destructor must not recurse.
+
+`finger_search(from, key)`: search for `key` starting from `from`. **It must support both directions, left and right**, and return `nullptr` if the key is absent.
+
+It works in two phases: first climb up while moving toward the target, until going any higher would overshoot it; then move toward the target while descending one level at a time. The tests count comparisons with `Counted`.
+
+## Stage 2 — Widths for ranks
+
+```cpp
+// in class IndexedSkipList<Key>
+std::size_t rank(const Node* node) const;
+Node* at(std::size_t index) const;
+```
+
+Every link also stores a width (how many level-0 nodes the link spans). Both `insert` and `erase` must keep the widths correct without changing their complexity.
+
+- `rank(node)`: the node's 0-based rank, in O(log n).
+- `at(index)`: return the node at position `index`, or `nullptr` if it is out of range, in O(log n).
+
+## Stage 3 — Rank search
+
+```cpp
+// in class IndexedSkipList<Key>
+Node* rank_search(Node* from, std::ptrdiff_t delta) const;
+```
+
+`rank_search(from, delta)`: return the node whose rank is `rank(from) + delta`. `delta` may be positive or negative; `delta == 0` returns `from`, and a rank out of range returns `nullptr`. **O(lg m)** with `m = |delta| + 1`, so you can't call `rank` and then `at`.
+
+## Stage 4 — Real-world extension: sliding median
+
+```cpp
+class SlidingMedian {
+public:
+    explicit SlidingMedian(std::uint64_t seed = 6046);
+
+    std::size_t size() const;
+    std::optional<std::int64_t> median() const;
+    void push(std::int64_t value);
+    void pop();
+    std::uint64_t steps() const;
+};
+```
+
+`SlidingMedian(seed)`: maintain a window of values in order of arrival.
+
+- `push(value)`: add a new value; duplicates are allowed.
+- `pop()`: remove the oldest value; throw `std::out_of_range` when the window is empty.
+- `median()`: return the value of rank `(n−1)/2` (the lower of the two middle values when the count is even), or `std::nullopt` when the window is empty.
+- `size()`, `steps()`: `steps()` returns the total steps taken by the internal list.
+
+Each update moves the median by at most one position, so hold on to the current median's node and move it with `rank_search`. The average number of steps per update must be constant; calling `at` from the head every time is caught by the tests.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the height reached in the climbing phase of finger search bounded by O(lg m)? How does this differ from the usual O(lg n) analysis of a skip list? (Hint: there are only `m` nodes in the range.)
+2. How are the widths updated on insertion? Why is the search path alone enough on deletion?
+3. Can a B-tree support the same finger search? If you need concurrency, which fits better, a skip list or a B-tree?
+
+---
+
+**Official solution:** [Solutions to Problem Set 5](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bbcc32bdd480116ca12b065cf6d6c454_MIT6_046JS15_pset5sols.pdf). Read it after you finish.

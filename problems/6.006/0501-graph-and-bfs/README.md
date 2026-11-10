@@ -1,6 +1,6 @@
 ---
-title: Graph 表示法與 BFS
-unit: 05 · Graph Search（PS5）
+title: Graph Representation and BFS
+unit: 05 · Graph Search (PS5)
 source: 6.006 Lecture 9, Recitation 9
 pdf: materials/6.006/lectures/lec09.pdf
 read: materials/6.006/recitations/rec09.pdf
@@ -8,49 +8,100 @@ kind: code
 minutes: 90
 ---
 
-# 0501 · Graph 表示法與 BFS
+# 0501 · Graph Representation and BFS
 
-> **實務上為什麼會遇到**：服務相依圖的影響範圍、社群網路的幾度分隔、爬蟲的抓取順序，都是 unweighted graph 上的 BFS。後面的題目會一直把它搬到更抽象的圖上跑，所以這裡要先寫到不用想。
+**Based on:** [Lecture 9: Breadth-First Search notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/196a95604877d326c6586e60477b59d4_MIT6_006S20_lec9.pdf) · **Read first:** [Recitation 9 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6afd7e9a85d7d36e204533569f9fccf6_MIT6_006S20_r09.pdf)
 
-頂點編號固定是 `0 … n-1`。一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** the blast radius in a service dependency graph, degrees of separation in a social network, and a web crawler's fetch order are all BFS on an unweighted graph. Later exercises keep running it on ever more abstract graphs, so get to the point where you can write it without thinking.
+
+## Your task
+
+Vertices are always numbered `0 … n-1`. You build an adjacency-list graph and BFS on top of it, then two variants of BFS: the shortest walk with an odd number of edges, and a search from both ends at once.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
 
 ## Stage 1 — Adjacency list
 
-實作 `Graph`。
+```cpp
+class Graph {
+public:
+    explicit Graph(int vertices);
 
-| 操作 | 行為 | 複雜度 |
+    int vertex_count() const;
+    std::size_t edge_count() const;
+
+    void add_directed(int from, int to);
+    void add_undirected(int a, int b);
+
+    std::span<const int> neighbors(int u) const;
+    int out_degree(int u) const;
+    int in_degree(int v) const;
+};
+```
+
+Implement `Graph`.
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `Graph(n)` | `n` 個頂點、沒有邊；`n < 0` 丟 `std::invalid_argument` | O(n) |
-| `vertex_count()` / `edge_count()` | `add_*` 每呼叫一次算一條邊 | O(1) |
-| `add_directed(u, v)` | 加入 `u → v` | 平均 O(1) |
-| `add_undirected(a, b)` | 兩端的 adjacency list 各放一筆；`a == b` 時只放一筆 | 平均 O(1) |
-| `neighbors(u)` | 依加入順序回傳 `std::span<const int>` | O(1) |
-| `out_degree(u)` / `in_degree(v)` | adjacency list 裡的筆數 / 指向 `v` 的筆數 | O(1) |
+| `Graph(n)` | `n` vertices and no edges; throw `std::invalid_argument` if `n < 0` | O(n) |
+| `vertex_count()` / `edge_count()` | Each successful call to an `add_*` function counts as one edge; a call that throws adds nothing | O(1) |
+| `add_directed(u, v)` | Add `u → v` | O(1) on average |
+| `add_undirected(a, b)` | Add one entry to the adjacency list of each end; only one entry when `a == b` | O(1) on average |
+| `neighbors(u)` | Return a `std::span<const int>` in insertion order | O(1) |
+| `out_degree(u)` / `in_degree(v)` | The number of entries in the adjacency list / the number of entries that point to `v` | O(1) |
 
-不去重：平行邊和 self-loop 都照存。任何函式拿到不存在的頂點都丟 `std::out_of_range`（後面幾關也一樣）。
+No deduplication: store parallel edges and self-loops as they come. Every function throws `std::out_of_range` when it gets a vertex that doesn't exist (in later stages too).
 
-## Stage 2 — BFS 與最短路徑樹
+## Stage 2 — BFS and the shortest-path tree
 
-- `bfs(g, s)` 回傳 `{dist, parent}`。`dist[v]` 是 `s` 到 `v` 的最少邊數，到不了是 `-1`；`parent[v]` 是某條最短路徑上 `v` 的前一個頂點，`s` 和到不了的頂點是 `kNoVertex`。
-- `shortest_path(g, s, t)`：回傳從 `s` 到 `t` 的頂點序列（含兩端），到不了回傳 `std::nullopt`。
-- `level_sets(g, s)`：`result[i]` 是距離恰為 `i` 的所有頂點，內部順序不拘，最後不留空的 level。
+```cpp
+inline constexpr int kNoVertex = -1;
 
-都要 O(V + E)。
+struct BfsTree {
+    std::vector<int> dist;
+    std::vector<int> parent;
+};
 
-## Stage 3 — 奇數步路徑
+BfsTree bfs(const Graph& graph, int source);
 
-`shortest_odd_walk(g, s, t)`：回傳從 `s` 到 `t`、**邊數為奇數**的最短 walk（可以重複經過頂點，`s == t` 時至少要走一步），不存在回傳 `std::nullopt`。
+std::optional<std::vector<int>> shortest_path(const Graph& graph, int source, int target);
 
-要 O(V + E)。
+std::vector<std::vector<int>> level_sets(const Graph& graph, int source);
+```
 
-## Stage 4 — 實務延伸：幾度分隔
+- `bfs(g, s)` returns `{dist, parent}`. `dist[v]` is the fewest edges from `s` to `v`, or `-1` if `v` is unreachable. `parent[v]` is the vertex before `v` on some shortest path; it is `kNoVertex` for `s` and for unreachable vertices.
+- `shortest_path(g, s, t)`: return the sequence of vertices from `s` to `t` (both ends included, so just `s` when `s == t`), or `std::nullopt` if `t` is unreachable.
+- `level_sets(g, s)`: `result[i]` holds every vertex at distance exactly `i`, in any order, with no empty level left at the end.
 
-`separation(g, a, b)`：`g` 是 undirected graph，回傳 `a` 到 `b` 的最少邊數，不連通回傳 `std::nullopt`。
+All of them must run in O(V + E).
 
-單向 BFS 在這裡太慢：圖有一百萬個頂點，但兩個使用者通常只隔幾層。請從兩端同時往外搜，frontier 一碰到就停，成本要跟兩邊實際走過的範圍成正比，而不是整張圖。
+## Stage 3 — Odd-length paths
 
-## 面試追問
+```cpp
+std::optional<std::vector<int>> shortest_odd_walk(const Graph& graph, int source,
+                                                  int target);
+```
 
-1. 邊數接近 V² 時，adjacency matrix 和 adjacency list 各自贏在哪裡？`neighbors` 回傳的 `span` 在什麼時候會失效？
-2. BFS 為什麼能保證距離最短？如果邊有 0 和 1 兩種權重，要怎麼改？
-3. 雙向 BFS 的 frontier 第一次相遇時，答案一定是最短嗎？你的實作靠什麼保證？最壞情況會比單向 BFS 好嗎？
+`shortest_odd_walk(g, s, t)`: return the shortest walk from `s` to `t` with an **odd number of edges**, as the sequence of vertices it passes through with both ends included (it may revisit vertices, and when `s == t` it must take at least one step), or `std::nullopt` if none exists.
+
+Must run in O(V + E).
+
+## Stage 4 — Real-world extension: degrees of separation
+
+```cpp
+std::optional<int> separation(const Graph& graph, int a, int b);
+```
+
+`separation(g, a, b)`: `g` is an undirected graph. Return the fewest edges between `a` and `b`, or `std::nullopt` if they aren't connected.
+
+A one-directional BFS is too slow here: the graph has a million vertices, but two users are usually only a few levels apart. Search outward from both ends at once and stop as soon as the frontiers touch. The cost must be proportional to the region that the two searches actually cover, not to the whole graph.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. When the number of edges approaches V², where does an adjacency matrix win, and where does an adjacency list win? When does the `span` returned by `neighbors` become invalid?
+2. Why does BFS guarantee shortest distances? If every edge weighs either 0 or 1, how would you change it?
+3. When the two frontiers of a bidirectional BFS first meet, is the answer always the shortest? What does your implementation rely on to guarantee it? Is its worst case any better than a one-directional BFS?

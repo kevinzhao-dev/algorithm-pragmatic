@@ -1,7 +1,7 @@
 ---
-title: 不用鎖的 Hash Table 插入（兩個字、一次 CAS）
-unit: 12 · Deterministic Execution（HW9）
-source: 6.172 HW9 §6 Write-up 3（lockless hashtable）
+title: Lockless Hash Table Insert (two words, one CAS)
+unit: 12 · Deterministic Execution (HW9)
+source: 6.172 HW9 §6 Write-up 3 (lockless hashtable)
 pdf: materials/6.172/homework/hw09/handout.pdf
 read: materials/6.172/lectures/lec17.pdf
 kind: code
@@ -9,43 +9,81 @@ minutes: 80
 sanitizer: tsan
 ---
 
-# 1213 · 不用鎖的 Hash Table 插入
+# 1213 · Lockless Hash Table Insert
 
-> **實務上為什麼會遇到**：硬體通常只保證單一 word 的 CAS，但一筆資料常常有兩個欄位。「先用 CAS 佔位，再發布其餘內容」是 lock-free hash map、ring buffer、log 系統的共同骨架，難的永遠是讀者在兩步之間看到什麼。
+**Original problem:** [HW9: Deterministic Execution](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/ddcc1a4046b1893ca38211dc54be44fc_MIT6_172F18hw9.pdf) · **Read first:** [Synchronization Without Locks](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/fc3b846f6e13e15e4982a92369ca3825_MIT6_172F18_lec17.pdf)
 
-一筆 entry 有 key 和 value 兩個 64-bit 欄位，但一次 CAS 只能動一個 word。key 不為 0、value 不為 0；home slot 是 `key % capacity`（capacity 是 2 的次方）；線性探測、不刪除。
+> **Why this comes up in practice:** hardware usually guarantees CAS on only a single word, but a record often has two fields. "Claim the slot with a CAS first, then publish the rest" is the common skeleton of lock-free hash maps, ring buffers, and logging systems, and the hard part is always what a reader sees between the two steps.
 
-用模板參數 `Atomic`（預設 `std::atomic`）宣告所有共享欄位：測試會換成 `_shared/08_dsched.hpp` 的 `dsched::Atomic`，窮舉 interleaving；另外也用真的 `std::atomic` 跑 TSan。
+## Original problem
 
-## Stage 1 — 單執行緒語意
+6.172 HW9 §6 (Lockless Hashtable) drops the locks from the homework's hash table altogether. Each entry is a pair of 64-bit words: a pointer, which serves as the key, and a size. Modern x86 processors can compare-and-swap 16 bytes at once (`CMPXCHG16B`), but early 64-bit processors could not, so the homework limits itself to a CAS on one 64-bit word, which means it can't write a whole entry atomically. Sizes are always positive, and the homework's `common.h` provides the 64-bit CAS wrapper.
 
-`LocklessTable<Atomic>(capacity)`：
+- Write-up 3: implement `hashtable_insert_lockless` with `InterlockedCompareExchange64` (and switch `hashtable_fill` over to it), and check it with `make hashtable-mt1000`. What has to change in `hashtable_lookup` so that the insert can get by with a single 8-byte compare-and-swap?
 
-- `insert(key, value)`：table 滿時回傳 `false`；key 已存在時覆寫 value。
-- `find(key)`：回傳 value，不存在回傳 `std::nullopt`。
+## Your task
 
-## Stage 2 — 併發插入
+An entry has two 64-bit fields, key and value, but one CAS can change only one word. Keys are never 0 and values are never 0; the home slot is `key % capacity` (capacity is a power of 2); probing is linear, and nothing is ever deleted.
 
-把 Stage 1 改成無鎖：
+Declare every shared field with the template parameter `Atomic` (default `std::atomic`): the tests swap in `dsched::Atomic` from `_shared/08_dsched.hpp` to enumerate interleavings, and also run TSan with a real `std::atomic`.
 
-- `insert`：用 CAS 把 key 寫進空 slot 來**佔位**，成功之後才寫 value（兩步之間別的 thread 看得到 key、看不到 value）。CAS 失敗就看是不是自己的 key，否則往下探測。
-- `find`：key 相符但 value 還是 0，代表寫入尚未完成，回傳 `std::nullopt`。
+You build the homework's lockless insert, together with a lookup that avoids its false negatives, and then go one step further in Stage 3 by publishing a value that isn't atomic at all.
 
-**不可以有 false negative**：一個 `insert` 回傳之後，**任何**後續的 `find` 都要找得到它，即使探測路徑上有另一個 slot 正停在「佔了位、還沒寫 value」的狀態。作業的 `hashtable_lookup` 遇到 size 為 0 的 slot 就放棄，那段程式碼就有這個問題，你的版本要避開。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-同一個 key 不會被兩個 thread 同時 insert。
+## Stage 1 — Single-threaded semantics
 
-## Stage 3 — 發布非 atomic 的內容
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class LocklessTable {
+public:
+    explicit LocklessTable(std::size_t capacity);
 
-`PublishedTable<Atomic>(capacity)`：value 換成一個**不是 atomic 的** `std::string`。
+    bool insert(std::uint64_t key, std::uint64_t value);
+    std::optional<std::uint64_t> find(std::uint64_t key) const;
+};
+```
 
-- `insert(key, text)`：CAS 佔位，把字串搬進 slot，再用一個 atomic 的 ready 旗標發布。key 已存在時回傳 `false`、不動現有內容；table 滿也回傳 `false`。
-- `find(key)`：ready 之後才讀字串，回傳它的副本；否則 `std::nullopt`。
+`LocklessTable<Atomic>(capacity)`:
 
-memory order 要自己選。發布端和讀取端如果沒有形成 happens-before，讀 `std::string` 就是 data race。TSan 只看得到這次執行真的發生的存取，測試通過不代表 memory order 一定對，要自己想清楚。
+- `insert(key, value)`: return `false` when the table is full; if the key already exists, overwrite its value.
+- `find(key)`: return the value, or `std::nullopt` if the key isn't there.
 
-## 面試追問
+## Stage 2 — Concurrent inserts
 
-1. Stage 2 的 CAS 和 value 的 store 各需要什麼 memory order？把 value 改成 relaxed 會壞在哪裡？（作業 Write-up 3）
-2. 作業的 `hashtable_lookup` 回傳 NULL 的那條路徑為什麼是 false negative？要修的話，改成繼續探測和改成等待，各有什麼取捨？
-3. 如果要支援 delete，這個設計會遇到什麼問題？tombstone 和 Robin Hood 各自怎麼處理？
+Make Stage 1 lock-free:
+
+- `insert`: **claim** an empty slot by writing the key into it with a CAS, and only after that succeeds, write the value (between the two steps, other threads can see the key but not the value). If the CAS fails, check whether the slot holds your own key; otherwise keep probing.
+- `find`: if the key matches but the value is still 0, the write hasn't finished yet; return `std::nullopt`.
+
+**There must be no false negatives:** once an `insert` has returned, **every** later `find` must find it, even if another slot on the probe path is stuck in the "claimed, but value not yet written" state. The homework's `hashtable_lookup` gives up when it reaches a slot whose size is 0, and that code has exactly this problem; your version must avoid it.
+
+No key is ever inserted by two threads at the same time.
+
+## Stage 3 — Publishing non-atomic content
+
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class PublishedTable {
+public:
+    explicit PublishedTable(std::size_t capacity);
+
+    bool insert(std::uint64_t key, std::string text);
+    std::optional<std::string> find(std::uint64_t key) const;
+};
+```
+
+`PublishedTable<Atomic>(capacity)`: the value is now a `std::string` that **is not atomic**.
+
+- `insert(key, text)`: claim the slot with a CAS, move the string into the slot, then publish it with an atomic ready flag. If the key already exists, return `false` and leave the existing content alone; also return `false` when the table is full.
+- `find(key)`: read the string only once it is ready, and return a copy of it; otherwise return `std::nullopt`.
+
+You choose the memory orders yourself. If the publishing side and the reading side don't form a happens-before relationship, reading the `std::string` is a data race. TSan only sees the accesses that actually happen in this run, so passing the tests doesn't mean your memory orders are right; think it through yourself.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. What memory order does Stage 2's CAS need, and what does the store of the value need? What breaks if you make the value store relaxed? (Homework Write-up 3)
+2. Why is the path where the homework's `hashtable_lookup` returns NULL a false negative? To fix it, what are the trade-offs between continuing to probe and waiting?
+3. If you had to support delete, what problems would this design run into? How do tombstones and Robin Hood hashing each handle it?

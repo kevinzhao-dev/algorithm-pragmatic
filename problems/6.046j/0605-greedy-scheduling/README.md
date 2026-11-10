@@ -1,6 +1,6 @@
 ---
-title: 貪婪排程（SPT、SRPT、Interval Partitioning）
-unit: 06 · Augmentation、APSP 與 MST（PS6）
+title: Greedy Scheduling (SPT, SRPT, interval partitioning)
+unit: 06 · Augmentation, APSP, and MST (PS6)
 source: 6.046J Recitation 6
 pdf: materials/6.046j/recitations/rec06.pdf
 read: materials/6.046j/recitations/rec06.pdf
@@ -8,29 +8,60 @@ kind: code
 minutes: 75
 ---
 
-# 0605 · 貪婪排程
+# 0605 · Greedy Scheduling
 
-> **實務上為什麼會遇到**：batch job 排程、CPU 排程的 SJF/SRPT、會議室與 GPU 機台的最少配置數。面試常見的 "meeting rooms II" 就是最後一關。
+**Based on:** [Greedy Algorithms: More Examples](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/151160c7c18d3f87159b7482823ff61c_MIT6_046JS15_Recitation6.pdf) · **Read first:** [Greedy Algorithms: More Examples](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/151160c7c18d3f87159b7482823ff61c_MIT6_046JS15_Recitation6.pdf)
 
-一次只看一關。所有時間都是整數。
+> **Why this comes up in practice:** batch job scheduling, SJF/SRPT in CPU scheduling, and the minimum number of meeting rooms or GPU machines to provision. The common interview question "meeting rooms II" is the last stage.
+
+## Your task
+
+All times are integers.
+
+You implement three greedy schedules from Recitation 6: SPT on one machine, its online preemptive counterpart SRPT, and interval partitioning onto the fewest machines.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
 
 ## Stage 1 — Shortest Processing Time First
 
-`std::vector<int> spt_order(std::span<const long long> durations)`：回傳一個執行順序（工作索引），使單機上的 total completion time 最小。O(n log n)。
+```cpp
+std::vector<int> spt_order(std::span<const long long> durations);
+long long total_completion_time(std::span<const long long> durations,
+                                std::span<const int> order);
+```
 
-`long long total_completion_time(std::span<const long long> durations, std::span<const int> order)`：依該順序計算 `Σ C_i`，時間從 0 開始、無閒置。
+`std::vector<int> spt_order(std::span<const long long> durations)`: return an execution order (a list of job indices) that minimizes the total completion time on a single machine. O(n log n).
 
-## Stage 2 — 線上版本：SRPT
+`long long total_completion_time(std::span<const long long> durations, std::span<const int> order)`: compute `Σ C_i` for that order, starting at time 0 with no idle time.
 
-`Job{release, duration}`：工作在 `release` 時才知道。允許搶占（preemption），每個時刻一台機器只跑一個工作，可以在任何整數時間切換，切換無成本。
+## Stage 2 — The online version: SRPT
 
-`std::vector<long long> srpt_completion(std::span<const Job> jobs)`：回傳每個工作的完成時間，使 `Σ (完成時間)` 最小。O(n log n)。
+```cpp
+struct Job {
+    long long release = 0;
+    long long duration = 0;
+};
+std::vector<long long> srpt_completion(std::span<const Job> jobs);
+```
 
-邊界：同時到達、工作在別的工作跑到一半時到達、duration 相同。
+`Job{release, duration}`: a job becomes known only at time `release`. Preemption is allowed: at any moment the single machine runs one job, and it may switch jobs at any integer time at no cost.
 
-## Stage 3 — Interval partitioning（實務延伸：最少機台數）
+`std::vector<long long> srpt_completion(std::span<const Job> jobs)`: return each job's completion time, minimizing `Σ (completion time)`. O(n log n).
 
-`Interval{start, finish}`，half-open：`[start, finish)`，保證 `start < finish`。要把所有區間分配給機台，同一台機台上的區間互不重疊。
+Edge cases: simultaneous arrivals, a job arriving while another one is halfway through, and equal durations.
+
+## Stage 3 — Interval partitioning (real-world extension: the fewest machines)
+
+```cpp
+struct Interval {
+    long long start = 0;
+    long long finish = 0;
+};
+```
+
+`Interval{start, finish}` is half-open, `[start, finish)`, and `start < finish` is guaranteed. Assign every interval to a machine so that the intervals on the same machine don't overlap.
 
 ```cpp
 struct Allocation {
@@ -40,10 +71,12 @@ struct Allocation {
 Allocation allocate(std::span<const Interval> intervals);
 ```
 
-O(n log n)。
+O(n log n).
 
-## 面試追問
+## Interview follow-ups
 
-1. SPT 的 exchange argument 怎麼寫？如果工作有權重（weighted completion time），排序鍵要換成什麼？
-2. 為什麼「依開始時間排序 + min-heap」能達到 maximum overlap 這個 lower bound？如果改成依結束時間排序會發生什麼？
-3. 為什麼可以熔化的 fractional make-change 用貪婪是對的，但整數硬幣的 make-change 不行？舉一組反例面額。
+Once you're done, answer without looking at your code:
+
+1. How does the exchange argument for SPT go? If jobs have weights (weighted completion time), what should the sort key become?
+2. Why does "sort by start time + a min-heap" reach the maximum-overlap lower bound? What happens if you sort by finish time instead?
+3. Why is greedy correct for fractional make-change, where coins can be melted down, but not for make-change with whole coins? Give a counterexample set of denominations.

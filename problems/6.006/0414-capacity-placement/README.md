@@ -1,6 +1,6 @@
 ---
-title: 容量排程（heap＋hash 的組合）
-unit: 04 · Trees & Heaps（PS4）
+title: Capacity Scheduling (a heap plus a hash table)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 PS4 Problem 4-4
 pdf: materials/6.006/psets/ps4/questions.pdf
 answer: materials/6.006/psets/ps4/solutions.pdf
@@ -9,44 +9,96 @@ kind: code
 minutes: 75
 ---
 
-# 0414 · 容量排程
+# 0414 · Capacity Scheduling
 
-> **實務上為什麼會遇到**：Kubernetes 的 scheduler、資料庫的 connection pool 分配、CDN 的流量排程，本質都是「把需求塞到還有容量的機器上」。單一資料結構解決不了，真正的工程是把 heap、hash table 和指標關係接對。
+**Original problem:** [Problem Set 4 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/bff0aaeeb571a77083f10fd8e31f71d4_MIT6_006S20_ps4-questions.pdf) · **Read first:** [Lecture 8: Binary Heaps notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/40d4851e550507ca14dc778b9b2266cc_MIT6_006S20_lec8.pdf), [Recitation 8 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/701c2f339890cbf9c0c2a3495d007f26_MIT6_006S20_r08.pdf)
 
-叢集有 `n` 台機器，每台有固定容量。任務（用唯一的字串名稱識別）有資源需求 `demand`，放到一台機器上要滿足：同一台機器上的 demand 總和不超過容量。
+> **Why this comes up in practice:** the Kubernetes scheduler, a database's connection-pool allocation, and a CDN's traffic scheduling all come down to fitting demand onto machines that still have capacity. No single data structure solves it; the real engineering is wiring the heap, the hash table, and the pointers between them together correctly.
 
-建議 `#include "../0406-updatable-heap/solution.hpp"`，重用可更新優先權的 heap；再加上 hash table。
+## Original problem
 
-`CapacityPlanner` 的介面：
+6.006 PS4 Problem 4-4 is about a town's n solar farms. Farm i is a pair (s_i, c_i): its address s_i is a positive integer that no other farm shares, and its capacity c_i is a positive integer, the highest rate of energy production it can sustain. A building is a pair (b_j, d_j): its name b_j is a string that no other building shares, and its demand d_j is a positive integer, the rate at which it consumes energy. A powered building is connected to exactly one farm, and the demands of all the buildings connected to one farm may add up to at most that farm's capacity. Design a database with the operations below, and state for each one whether its time bound is worst-case, expected, and/or amortized.
 
-## Stage 1 — 放置任務
+- `initialize(S)`: set up the database in O(n) time from the list S = ((s_0, c_0), …, (s_{n−1}, c_{n−1})) of the n farms.
+- `power_on(b_j, d_j)`: in O(log n) time, connect building b_j with demand d_j to any farm whose remaining capacity is at least d_j, or report that no such farm exists.
+- `power_off(b_j)`: disconnect building b_j in O(log n) time.
+- `customers(s_i)`: in O(k) time, list the names of the k buildings that the farm at address s_i supplies.
 
-- `explicit CapacityPlanner(machines)`：O(n)。
-- `place(task, demand)`：把任務放到**任何一台** `available ≥ demand` 的機器上，回傳它的 id；放不下時回傳 `std::nullopt` 且不改變狀態。期望 O(log n)。`task` 已存在時丟 `std::invalid_argument`。
-- `available(machine)`：這台機器還剩多少容量，期望 O(1)；未知 id 丟 `std::out_of_range`。
+## Your task
 
-`available == demand` 是放得下的。
+A cluster has `n` machines, each with a fixed capacity. A task (identified by a unique string name) has a resource requirement, `demand`, and placing it on a machine must satisfy one rule: the total demand on a machine must not exceed its capacity.
 
-## Stage 2 — 釋放
+You should `#include "../0406-updatable-heap/solution.hpp"` and reuse the heap with updatable priorities, together with a hash table.
 
-`release(task)`：把任務從機器上移除，把容量還回去。期望 O(log n)。未知的 task 丟 `std::out_of_range`。任務釋放後，它的名字可以再次使用。
+The stages below give the interface of `CapacityPlanner`. It is the database from the original problem, with machines in place of farms and tasks in place of buildings; Stage 4 adds node draining, which the original doesn't have.
 
-要點：只有握著「這台機器在 heap 裡的位置」，才能在 O(log n) 內更新它。這是你剛做好的 handle 派上用場的時候。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 3 — 查詢
+## Stage 1 — Placing tasks
 
-`tasks_on(machine)`：這台機器上所有任務的名稱（順序不限），O(k)，`k` 是回傳數量。未知的 machine 丟 `std::out_of_range`。
+```cpp
+class CapacityPlanner {
+public:
+    using MachineId = std::uint64_t;
 
-## Stage 4 — 實務延伸：Node Drain
+    struct Machine {
+        MachineId id;
+        std::uint64_t capacity;
+    };
 
-維護某台機器前要先把任務搬走：
+    explicit CapacityPlanner(std::span<const Machine> machines);
+    std::optional<MachineId> place(const std::string& task, std::uint64_t demand);
+    std::uint64_t available(MachineId machine) const;
+};
+```
 
-`drain(machine)`：把這台機器上的每個任務搬到**其他機器**（每個任務都要有地方放，你可以用任何放置順序；搬回自己身上是不合格的）。全部搬完回傳 `true`，此後這台機器沒有任務，且可以再被放置。只要有任何一個任務搬不走，就回傳 `false`，且**整個狀態要完全恢復原狀**（每個任務都回到原機器，各機器的 `available` 都一樣）。未知 machine 丟 `std::out_of_range`。機器上沒有任務時回傳 `true`。
+- `explicit CapacityPlanner(machines)`: O(n).
+- `place(task, demand)`: put the task on **any** machine with `available ≥ demand` and return that machine's id. If it doesn't fit anywhere, return `std::nullopt` and leave the state unchanged. Expected O(log n). Throw `std::invalid_argument` if `task` already exists.
+- `available(machine)`: how much capacity this machine has left, in expected O(1); throw `std::out_of_range` for an unknown id.
 
-（`drain` 的成敗可能跟放置順序有關，這是裝箱問題的本質，測試只檢查沒有爭議的情況。）
+A task fits when `available == demand`.
 
-## 面試追問
+## Stage 2 — Releasing
 
-1. 如果 `demand` 很大，`place` 為什麼只需要看「最空」的那台機器就夠判斷放不放得下？
-2. 這裡用的 heap 和 hash 有哪些操作是**期望**、哪些是**最差**？如果面試官要求全都最差 O(log n)，要怎麼換？
-3. Drain 的回滾要記下什麼資料？失敗時的時間複雜度是多少？
+```cpp
+// in class CapacityPlanner
+void release(const std::string& task);
+```
+
+`release(task)`: remove the task from its machine and give the capacity back. Expected O(log n). Throw `std::out_of_range` for an unknown task. Once a task is released, its name can be used again.
+
+The key point: you can only update a machine in O(log n) if you hold its position in the heap. This is where the handles you just built come in.
+
+## Stage 3 — Queries
+
+```cpp
+// in class CapacityPlanner
+std::vector<std::string> tasks_on(MachineId machine) const;
+```
+
+`tasks_on(machine)`: the names of all the tasks on this machine (in any order), in O(k), where `k` is the number returned. Throw `std::out_of_range` for an unknown machine.
+
+## Stage 4 — Real-world extension: Node Drain
+
+```cpp
+// in class CapacityPlanner
+bool drain(MachineId machine);
+```
+
+Before maintenance on a machine, its tasks must be moved off first:
+
+`drain(machine)`: move every task on this machine to **other machines** (every task needs somewhere to go, and you may place them in any order; moving a task back onto the same machine doesn't count). If everything moves, return `true`; afterwards the machine has no tasks and can take placements again. If even one task can't be moved, return `false`, and **the whole state must be restored exactly** (every task back on its original machine, and every machine's `available` unchanged). Throw `std::out_of_range` for an unknown machine. If the machine has no tasks, return `true`.
+
+(Whether `drain` succeeds can depend on the placement order. That is the nature of bin packing, so the tests only check cases whose outcome is not in doubt.)
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. If `demand` is large, why is looking at the emptiest machine enough for `place` to decide whether the task fits?
+2. Which operations of the heap and hash table used here have **expected** bounds, and which have **worst-case** bounds? If the interviewer required worst-case O(log n) for everything, what would you swap in?
+3. What does the drain rollback need to record? What is its time complexity when it fails?
+
+---
+
+**Official solution:** [Problem Set 4 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0462839ce975fea99f6a7b8adc8e1477_MIT6_006S20_ps4-solutions.pdf). Read it after you finish.

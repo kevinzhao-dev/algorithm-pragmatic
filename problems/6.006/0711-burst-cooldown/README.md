@@ -1,6 +1,6 @@
 ---
-title: Burst 排程與冷卻（狀態式線性 DP）
-unit: 07 · Dynamic Programming I（PS7）
+title: Burst Scheduling and Cooldowns (linear DP with state)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 PS7 Problem 7-1
 pdf: materials/6.006/psets/ps7/questions.pdf
 answer: materials/6.006/psets/ps7/solutions.pdf
@@ -9,41 +9,71 @@ kind: code
 minutes: 70
 ---
 
-# 0711 · Burst 排程與冷卻
+# 0711 · Burst Scheduling and Cooldowns
 
-> **實務上為什麼會遇到**：GPU 和 CPU 的 boost 時脈、雲端的 burst credit、API 的 cooldown，都是「現在多做一點，接下來幾個時間片只能維持基本水準」。排程器得在事前決定什麼時候 burst 才划算，而不是能 burst 就 burst。
+**Original problem:** [Problem Set 7 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/3dff7a1ecbc241e9b91b48e69a1588d4_MIT6_006S20_ps7_questions.pdf) · **Read first:** [Lecture 15: Dynamic Programming, Part 1: SRBOT, Fib, DAGs, Bowling notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9eb3e9a51a7b5b60b0f67c2277f8b0ee_MIT6_006S20_lec15.pdf)
 
-有 `n` 個連續的時間片，第 `i` 片平常可以處理 `base` 單位，burst 時可以處理 `burst` 單位（`0 ≤ base < burst`）。如果在第 `i` 片 burst，**接下來的 `cooldown` 片都不能 burst**，只能處理各自的 `base`。
+> **Why this comes up in practice:** GPU and CPU boost clocks, burst credits in the cloud, and API cooldowns all follow the pattern "do a bit more now, then stay at the baseline for the next few time slots". A scheduler has to decide ahead of time when a burst pays off, rather than bursting whenever it can.
+
+## Original problem
+
+6.006 PS7 Problem 7-1 is set in a primary election that a candidate is projected to lose. There are n state contests, held one per day over n days. Contest i ∈ {1, …, n} has a delegate count d_i, a positive integer, and a projected delegate count z_i < d_i: the number of those delegates she would win if she did nothing more. In total there are D = Σ_i d_i delegates, winning requires at least ⌊D/2⌋ + 1, and Σ_i z_i < ⌊D/2⌋ + 1.
+
+On any given day, her team may campaign in a single state or not at all. A campaign on day i captures all d_i delegates of state i, after which the team spends the next two days relocating and can't campaign anywhere. The problem asks for an O(n)-time algorithm that decides whether some choice of campaign days lets her win. As with every PS7 problem, the solution must be a dynamic program presented through the SRT BOT steps.
+
+## Your task
+
+There are `n` consecutive time slots. Slot `i` normally processes `base` units, or `burst` units when it bursts (`0 ≤ base < burst`). If slot `i` bursts, **none of the next `cooldown` slots may burst**; each of them processes only its own `base`.
 
 ```cpp
 struct Slot { std::int64_t base; std::int64_t burst; };
 ```
 
-一次只看一關，做完再往下讀。
+This is the original problem in scheduling terms: a slot is a day, `base` and `burst` are z_i and d_i, a burst is a campaign day, `cooldown = 2` is the two days of relocation, and meeting the quota ⌊D/2⌋ + 1 is the original yes-or-no question. Beyond that question, you also compute the maximum throughput, return a schedule, support any cooldown, and cap the number of bursts.
 
-## Stage 1 — 最大總處理量（`cooldown = 2`）
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Maximum total throughput (`cooldown = 2`)
 
 ```cpp
 std::int64_t max_throughput(std::span<const Slot> slots, std::size_t cooldown = 2);
 bool can_meet_quota(std::span<const Slot> slots, std::int64_t quota, std::size_t cooldown = 2);
 ```
 
-`can_meet_quota`：能不能讓總處理量達到 `quota`。O(n) 時間。這一關只需要處理預設的 `cooldown`。
+`can_meet_quota`: whether the total throughput can reach `quota`. O(n) time. This stage only needs to handle the default `cooldown`.
 
-## Stage 2 — 排程表
+## Stage 2 — The schedule
 
-`std::vector<std::size_t> burst_plan(std::span<const Slot> slots, std::size_t cooldown = 2)`：回傳要 burst 的時間片（遞增），總處理量要等於最佳值。同分時任一種都可以。
+```cpp
+std::vector<std::size_t> burst_plan(std::span<const Slot> slots,
+                                    std::size_t cooldown = 2);
+```
 
-## Stage 3 — 任意 cooldown，O(n) 時間、O(min(n, cooldown)) 記憶體
+`std::vector<std::size_t> burst_plan(std::span<const Slot> slots, std::size_t cooldown = 2)`: return the slots that burst, in increasing order; the total throughput must equal the optimum. When several schedules tie, any of them is fine.
 
-現在 `cooldown` 可以是任意值（`0` 表示沒有限制，也可能比 `n` 大）。`max_throughput` 的時間要維持 O(n)，不可以隨 `cooldown` 變慢；額外記憶體要在 O(min(n, cooldown)) 以內。`burst_plan` 也要支援任意 `cooldown`，時間 O(n)、記憶體不受此限。
+## Stage 3 — Any cooldown, O(n) time, O(min(n, cooldown)) memory
 
-## Stage 4 — 實務延伸：burst 額度
+Now `cooldown` can be any value (`0` means no restriction, and it may also be larger than `n`). `max_throughput` must stay O(n) time and must not slow down as `cooldown` grows; its extra memory must stay within O(min(n, cooldown)) (with `cooldown = 8`, the tests allow at most 4 KiB of heap for 200,000 slots). `burst_plan` must also support any `cooldown`, in O(n) time, but its memory isn't limited this way.
 
-`std::int64_t max_throughput_limited(std::span<const Slot> slots, std::size_t cooldown, std::size_t max_bursts)`：同時限制總共最多 burst `max_bursts` 次。O(n · max_bursts) 時間，記憶體 O(n)。
+## Stage 4 — Real-world extension: a burst budget
 
-## 面試追問
+```cpp
+std::int64_t max_throughput_limited(std::span<const Slot> slots, std::size_t cooldown,
+                                    std::size_t max_bursts);
+```
 
-1. 這題要從 `quota` 的角度判定可行性，會比先求最大值再比較更快嗎？為什麼「能不能達標」和「最大能多少」在這裡是同一件事？
-2. Stage 3 為什麼可以只留最近 `cooldown + 1` 個子問題？如果 cooldown 依時間片而異（每片不同），這個省記憶體的手法還成立嗎？
-3. 這是 polynomial 還是 pseudopolynomial？Stage 4 呢？（`max_bursts` 不必大於 `n`。）
+`std::int64_t max_throughput_limited(std::span<const Slot> slots, std::size_t cooldown, std::size_t max_bursts)`: additionally limit the total number of bursts to at most `max_bursts`. O(n · max_bursts) time, O(n) memory.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Would deciding feasibility directly in terms of `quota` be faster than computing the maximum first and then comparing? Why are "can we reach the target?" and "what is the most we can get?" the same question here?
+2. Why can Stage 3 keep only the most recent `cooldown + 1` subproblems? If the cooldown varied from slot to slot, would this memory-saving trick still work?
+3. Is this polynomial or pseudopolynomial? What about Stage 4? (`max_bursts` never needs to be larger than `n`.)
+
+---
+
+**Official solution:** [Problem Set 7 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ed996e1569867432dc1fbdeae53e309f_MIT6_006S20_ps7_solutions.pdf). Read it after you finish.

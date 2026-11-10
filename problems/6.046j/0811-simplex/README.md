@@ -1,6 +1,6 @@
 ---
-title: Simplex Solver（對偶憑證）
-unit: 08 · LP 與 NP-Completeness（PS8）
+title: Simplex Solver (dual certificates)
+unit: 08 · LP and NP-Completeness (PS8)
 source: 6.046J PS8 Problem 8-1
 pdf: materials/6.046j/psets/ps08/questions.pdf
 answer: materials/6.046j/psets/ps08/solutions.pdf
@@ -11,45 +11,87 @@ minutes: 180
 
 # 0811 · Simplex Solver
 
-> **實務上為什麼會遇到**：整數規劃 solver 的最內圈就是 simplex，大家天天用卻少有人寫過。Simplex 走過的頂點序列、退化時的 cycling、最後吐出的 dual solution，都是除錯 LP 模型時最常要看的東西。
+**Original problem:** [Problem Set 8](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/29a28961d8c73e013ba78238e66dc2ab_MIT6_046JS15_pset8.pdf) · **Read first:** [Linear Programming: LP, Reductions, Simplex](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/927a49adf7b3c4a6de8c31393509552c_MIT6_046JS15_lec15.pdf)
 
-這題把 PS 的手算練習變成一個真正的 solver。所有運算都用 exact rational `Frac`（`_shared/06_fraction.hpp`）。Standard form：`maximize c·x`，受限於 `A x ≤ b`、`x ≥ 0`，`StandardLp{c, A, b}`（`A` 是 m×n）。
+> **Why this comes up in practice:** the innermost loop of an integer-programming solver is simplex, which everyone uses every day but few people have ever written. The sequence of vertices simplex visits, cycling under degeneracy, and the dual solution it finally outputs are what you look at most often when debugging an LP model.
 
-一次只看一關。
+## Original problem
 
-## Stage 1 — 可行區域的頂點（Part a）
+6.046J PS8 Problem 8-1 works through one small LP by hand. It has two variables x1 and x2, three constraints, and nonnegativity:
 
-`std::vector<std::pair<Frac,Frac>> feasible_vertices_2d(const StandardLp& lp)`：只考慮 2 個變數的 LP，回傳可行區域所有頂點 `(x, y)`（去重、依字典序升冪）。可行區域為空時回傳空 vector。
+- x1 + x2 ≤ 10
+- x2 ≥ 4x1 − 20
+- x1 + 3x2 ≤ 24
+- x1, x2 ≥ 0
 
-提示：候選點來自約束直線、以及 `x = 0`、`y = 0` 兩兩相交。
+The objective is to maximize p = 4x1 + x2.
 
-## Stage 2 — Simplex（Part b、c）
+- (a) Sketch the feasible region.
+- (b) Rewrite the LP in standard form, then convert that into slack form.
+- (c) Solve the slack-form LP with simplex: say which pivot you pick at each step, show the LP after every pivot and the sequence of feasible solutions, and mark those solutions on the sketch from (a).
+- (d) Write down the dual of your standard-form LP from (b) and give its optimal value; the hint is to use your result from (c).
+
+## Your task
+
+This exercise turns the problem set's hand computation into a real solver. All arithmetic uses the exact rational type `Frac` (from `_shared/06_fraction.hpp`). Standard form is `maximize c·x` subject to `A x ≤ b` and `x ≥ 0`, stored as `StandardLp{c, A, b}` (`A` is m×n).
+
+Instead of drawing the region and pivoting by hand, you enumerate the vertices of any two-variable LP, run simplex on any LP in standard form, and return a dual certificate with the optimum.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Vertices of the feasible region (Part a)
+
+```cpp
+struct StandardLp {
+    std::vector<Frac> c;
+    std::vector<std::vector<Frac>> A;
+    std::vector<Frac> b;
+};
+
+std::vector<std::pair<Frac, Frac>> feasible_vertices_2d(const StandardLp& lp);
+```
+
+`std::vector<std::pair<Frac,Frac>> feasible_vertices_2d(const StandardLp& lp)`: for an LP with exactly 2 variables, return every vertex `(x, y)` of the feasible region (without duplicates, in increasing lexicographic order). Return an empty vector when the feasible region is empty.
+
+Hint: the candidate points are the pairwise intersections of the constraint lines and the lines `x = 0` and `y = 0`.
+
+## Stage 2 — Simplex (Parts b and c)
 
 ```cpp
 enum class LpStatus { Optimal, Infeasible, Unbounded };
 struct LpResult {
     LpStatus status = LpStatus::Infeasible;
     Frac value;
-    std::vector<Frac> x;      // 長度 n
-    std::vector<Frac> dual;   // Stage 4 才用，長度 m
+    std::vector<Frac> x;      // length n
+    std::vector<Frac> dual;   // used only from Stage 4 on, length m
 };
 LpResult solve_lp(const StandardLp& lp, std::vector<std::vector<Frac>>* trace = nullptr);
 ```
 
-這關只處理 `b ≥ 0`（原點可行）的情況。用 slack form 反覆 pivot，一律採用 **Bland's rule**（選編號最小的可進基變數；離基選擇同樣 tie-break，選最小 basic 編號）以避免 cycling。
+This stage only handles `b ≥ 0` (the origin is feasible). Pivot repeatedly in slack form, and always use **Bland's rule** to avoid cycling: the entering variable is the eligible one with the smallest index, and the leaving variable is tie-broken the same way, by the smallest basic index.
 
-`trace` 非空時，把每次 pivot 後 basic solution 的前 n 個變數值依序寫入（含起點 `0`）。
+When `trace` is not null, append the values of the first n variables of the basic solution after each pivot, in order (including the starting point `0`).
 
-## Stage 3 — Phase I：初始可行基（Part c 延伸）
+## Stage 3 — Phase I: an initial feasible basis (extending Part c)
 
-`b` 可以有負值。用輔助 LP 找初始可行基，或判定 `Infeasible`。`Unbounded` 時 `solve_lp` 回傳 `status = Unbounded`（`x`/`value` 不必有意義）。
+`b` may have negative entries. Use an auxiliary LP to find an initial feasible basis, or report `Infeasible`. When the LP is `Unbounded`, `solve_lp` returns `status = Unbounded` (`x`/`value` need not mean anything).
 
-## Stage 4 — 對偶憑證（Part d）
+With `trace`, record only Phase II: the first entry is the initial feasible basic solution (the origin when `b ≥ 0`, otherwise the one Phase I finds), followed by one entry per Phase II pivot. Never record Phase I pivots or an infeasible origin, since the tests check that every entry is feasible; an `Infeasible` LP leaves the trace empty.
 
-`status == Optimal` 時，`dual` 必須是對偶 LP 的最佳解：`dual ≥ 0`、`Aᵀ·dual ≥ c`、`b·dual == value`。這就是最佳性的 certificate：任何人拿到 `x` 和 `dual`，不必相信你的 solver，只要驗算即可。
+## Stage 4 — A dual certificate (Part d)
 
-## 面試追問
+When `status == Optimal`, `dual` must be an optimal solution of the dual LP: `dual ≥ 0`, `Aᵀ·dual ≥ c`, and `b·dual == value`. This is the certificate of optimality: anyone holding `x` and `dual` can check the answer by hand, without having to trust your solver.
 
-1. Bland's rule 為什麼能避免 cycling？它的代價是什麼？實務 solver 用什麼規則？
-2. 退化（degenerate）pivot 的意思是什麼？為什麼目標值不增加時 simplex 不會「卡住」（在 Bland's rule 下）？
-3. 為什麼 simplex 最壞情況是指數的（Klee–Minty），實務上卻通常很快？和 interior point 比較呢？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does Bland's rule prevent cycling? What does it cost? Which rules do practical solvers use?
+2. What is a degenerate pivot? Why doesn't simplex get "stuck" when the objective value doesn't increase (under Bland's rule)?
+3. Why is simplex exponential in the worst case (Klee–Minty), yet usually fast in practice? How does it compare with interior-point methods?
+
+---
+
+**Official solution:** [Solutions to Problem Set 8](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/e75cb61dde1769d9d9ea22069b5ce2c4_MIT6_046JS15_pset8sols.pdf). Read it after you finish.

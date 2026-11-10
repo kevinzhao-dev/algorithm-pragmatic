@@ -1,6 +1,6 @@
 ---
-title: Merge Sort 與反序數
-unit: 02 · Sorting & Recurrences（PS2）
+title: Merge Sort and Inversion Counting
+unit: 02 · Sorting & Recurrences (PS2)
 source: 6.006 Lecture 3, Recitation 3
 pdf: materials/6.006/lectures/lec03.pdf
 read: materials/6.006/recitations/rec03.pdf
@@ -10,36 +10,62 @@ minutes: 70
 
 # 0203 · Merge Sort
 
-> **實務上為什麼會遇到**：`std::stable_sort`、外部排序（資料放不進記憶體）、LSM tree 的 compaction 都是 merge；而「兩個排名差多少」用反序數量化（Kendall tau），推薦系統的評估天天在用。
+**Based on:** [Lecture 3: Sorting notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6d1ae5278d02bbecb5c4428928b24194_MIT6_006S20_lec3.pdf) · **Read first:** [Recitation 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1869dbf640ded6b31f1bd369d2001ef5_MIT6_006S20_r03.pdf)
 
-所有比較都用 `less(a, b)`，預設 `std::less<T>`。
+> **Why this comes up in practice:** `std::stable_sort`, external sorting (when the data doesn't fit in memory), and LSM-tree compaction are all merges. Quantifying "how different two rankings are" with an inversion count (Kendall tau) is something recommender-system evaluation does every day.
+
+## Your task
+
+Every comparison uses `less(a, b)`, which defaults to `std::less<T>`.
+
+You write a stable merge, then a merge sort that allocates its scratch space only once, and finish by counting inversions to measure the distance between two rankings.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Merge
 
-`merge_sorted<T>(a, b, less)`：`a`、`b` 都已排序（`std::span<const T>`），回傳合併後排序好的 `std::vector<T>`。
+```cpp
+template <typename T, typename Less = std::less<T>>
+std::vector<T> merge_sorted(std::span<const T> a, std::span<const T> b, Less less = {});
+```
 
-- 比較次數 ≤ `|a| + |b|`。
-- **穩定**：比較相等時，`a` 的元素排在 `b` 的元素之前。
+`merge_sorted<T>(a, b, less)`: `a` and `b` are both sorted (`std::span<const T>`); return the merged, sorted `std::vector<T>`.
+
+- At most `|a| + |b|` comparisons.
+- **Stable**: when elements compare equal, the element from `a` goes before the element from `b`.
 
 ## Stage 2 — Merge Sort
 
-`merge_sort<T>(items, less)`：把 `items`（`std::span<T>`）原地排序完成（可以用額外空間，但呼叫結束後 `items` 是排好的）。元素只保證可 move，不要求 default-constructible。
+```cpp
+template <typename T, typename Less = std::less<T>>
+void merge_sort(std::span<T> items, Less less = {});
+```
 
-- **穩定**。
-- 比較次數 ≤ `1.5 · n · ⌈log₂ n⌉ + n`（兩兩合併的最壞情況；測試用計數檢查）。
-- **整個排序只配置一次暫存空間**（heap allocation 次數 ≤ 2，由測試計算）：不要每次遞迴都建新的 `vector`。
+`merge_sort<T>(items, less)`: sort `items` (a `std::span<T>`) in place (you may use extra space, but when the call returns, `items` is sorted). Elements are only guaranteed to be movable; they need not be default-constructible.
 
-提示：一個長度 `n` 的 buffer 就夠。寫個輔助函式把 `items[lo..hi)` 排好，merge 時把左半搬進 buffer，再從 buffer 和右半合併回去（或直接合併到 buffer 再搬回）。
+- **Stable**.
+- At most `1.5 · n · ⌈log₂ n⌉ + n` comparisons (the worst case of pairwise merging; the tests check it by counting).
+- **The whole sort allocates scratch space only once** (at most 2 heap allocations, counted by the tests): don't create a new `vector` in every recursive call.
 
-## Stage 3 — 實務延伸：排名距離
+Hint: a single buffer of length `n` is enough. Write a helper that sorts `items[lo..hi)`; to merge, move the left half into the buffer, then merge from the buffer and the right half back into place (or merge straight into the buffer and move the result back).
 
-- `count_inversions(values)`：`values` 中滿足 `i < j` 且 `values[i] > values[j]` 的 pair 數量，**O(n log n)**，不可以暴力 O(n²)。答案用 `uint64_t`。
-- `kendall_tau_distance(rank_a, rank_b)`：`rank_a`、`rank_b` 都是 `0…n−1` 的排列，代表兩種排名（例如新舊兩版搜尋演算法對同一批結果的排序）。回傳「被兩種排名排序方向不同的 pair 數量」。長度不同或不是排列時丟 `std::invalid_argument`。
+## Stage 3 — Real-world extension: ranking distance
 
-提示：merge 時，每當右半的元素比左半剩下的元素先出列，就累加 inversions。
+```cpp
+std::uint64_t count_inversions(std::span<const int> values);
 
-## 面試追問
+std::uint64_t kendall_tau_distance(std::span<const int> rank_a, std::span<const int> rank_b);
+```
 
-1. 為什麼 merge sort 的遞迴深度是 O(log n)，但 stack 用量不是問題？真正的額外空間在哪？能做到 in-place merge 嗎，代價是什麼？
-2. 寫出 merge sort 的 recurrence，並說明 Master Theorem 的哪個 case 適用。
-3. 反序數跟 insertion sort 的 swap 次數有什麼關係（對照 0202 和 0212）？
+- `count_inversions(values)`: the number of pairs in `values` with `i < j` and `values[i] > values[j]`, in **O(n log n)**; a brute-force O(n²) solution is not allowed. The answer is a `uint64_t`.
+- `kendall_tau_distance(rank_a, rank_b)`: `rank_a` and `rank_b` are both permutations of `0…n−1` that represent two rankings (for example, how the old and new versions of a search algorithm order the same set of results). Return "the number of pairs that the two rankings put in opposite orders." If the lengths differ, or either one is not a permutation, throw `std::invalid_argument`.
+
+Hint: during a merge, every time an element of the right half comes out ahead of the elements still left in the left half, add to the inversion count.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Merge sort's recursion depth is O(log n); why isn't stack usage a problem? Where is the real extra space? Can you merge in place, and what does that cost?
+2. Write down merge sort's recurrence, and explain which case of the Master Theorem applies.
+3. How is the number of inversions related to the number of swaps insertion sort makes (compare 0202 and 0212)?

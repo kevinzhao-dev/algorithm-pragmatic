@@ -1,37 +1,77 @@
 ---
-title: 多層快取與 Miss-Ratio Curve
-unit: 11 · Caching（HW8）
-source: 6.172 Lecture 14（多層快取）；取代 HW2 §2.2 的 Cachegrind
+title: Multilevel Caches and the Miss-Ratio Curve
+unit: 11 · Caching (HW8)
+source: 6.172 Lecture 14 (multilevel caches); replaces Cachegrind in HW2 §2.2
 pdf: materials/6.172/lectures/lec14.pdf
 read: materials/6.172/homework/hw02/handout.pdf
 kind: code
 minutes: 80
 ---
 
-# 1103 · 多層快取與 Miss-Ratio Curve
+# 1103 · Multilevel Caches and the Miss-Ratio Curve
 
-> **實務上為什麼會遇到**：決定 L2 要多大、Redis 要給多少記憶體、CDN 每個節點要放多少物件，問的都是同一件事：「容量加倍，miss 會少多少？」一個一個容量重跑模擬太慢，stack distance 一次掃過 trace 就能畫出整條曲線。
+**Based on:** [Caching and Cache-Efficient Algorithms](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/329bfc6e1808c375afa517feb3c4c273_MIT6_172F18_lec14.pdf) · **Read first:** [HW2: Profiling](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/796439e646c02f44348d50b1836ff7f9_MIT6_172F18hw2.pdf)
 
-接續 1101。每一層快取直接用 `_shared/08_cache_sim.hpp` 的 `practice::cachesim::Cache`（介面跟你在 1101 寫的幾乎一樣：`access`、`access_range`、`accesses()`、`misses()`），這題專心在「層」與「曲線」。
+> **Why this comes up in practice:** deciding how big an L2 should be, how much memory to give Redis, or how many objects each CDN node should hold all come down to the same question: "if the capacity doubles, how many fewer misses are there?" Rerunning the simulation one capacity at a time is too slow; with stack distances, a single pass over the trace draws the whole curve.
 
-## Stage 1 — 兩層（或更多層）快取與多 byte 存取
+## Original problem
 
-`CacheHierarchy(levels)`：`levels[0]` 最接近 CPU，每一層是 `LevelConfig{capacity_bytes, line_bytes, ways}`。`levels` 是空的，或各層的 `line_bytes` 不一樣，丟 `std::invalid_argument`（不合法的單層參數則由 `Cache` 丟出）。
+6.172 HW2 §2.2 introduces Cachegrind, a Valgrind tool that simulates how a program uses the machine's cache hierarchy and branch predictor. That makes it useful on virtual machines where hardware performance counters aren't available, although its results depend on the machine it runs on.
 
-- `access(address)`：從第 0 層開始查，**只有 miss 才往下一層**。回傳滿足這次存取的層數索引；全部 miss（打到記憶體）回傳 `levels.size()`。miss 的層都要把這條 line 載入。
-- `access_range(address, bytes)`：`[address, address + bytes)` 涵蓋的每條 line 各做一次 `access`，回傳其中打到記憶體的 line 數。`bytes == 0` 什麼都不做。跨 line 邊界的 8-byte 存取會碰到兩條 line；`address + bytes - 1` 剛好是位址空間最頂端時也不可以溢位。
-- `accesses(level)`、`misses(level)`：各層看到的存取與 miss 次數。下層只看得到上層的 miss。
+- Checkoff 2: run `sum`, a program that allocates an array of U = 10 million elements and then adds up N = 100 million elements chosen at random, under Cachegrind, and look at the D1 misses (the first-level data cache) and the LLd misses (the last-level data cache, usually L3). Do the numbers match what you expect? Try other values of N and U: how can you bring the number of cache misses down?
+
+## Your task
+
+This continues 1101. Each cache level uses `practice::cachesim::Cache` from `_shared/08_cache_sim.hpp` directly (its interface is almost the same as the one you wrote in 1101: `access`, `access_range`, `accesses()`, `misses()`), so this exercise focuses on the "levels" and the "curve".
+
+Instead of running Cachegrind on a real program, you build the multilevel model yourself and compute the miss counts for every cache size in a single pass over a trace.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Two (or more) cache levels and multi-byte accesses
+
+```cpp
+struct LevelConfig {
+    std::size_t capacity_bytes;
+    std::size_t line_bytes;
+    std::size_t ways;
+};
+
+class CacheHierarchy {
+public:
+    explicit CacheHierarchy(std::vector<LevelConfig> levels);
+
+    std::size_t access(std::uint64_t address);
+    std::size_t access_range(std::uint64_t address, std::size_t bytes);
+    std::uint64_t accesses(std::size_t level) const;
+    std::uint64_t misses(std::size_t level) const;
+};
+```
+
+`CacheHierarchy(levels)`: `levels[0]` is closest to the CPU, and each level is a `LevelConfig{capacity_bytes, line_bytes, ways}`. If `levels` is empty, or the levels' `line_bytes` differ, throw `std::invalid_argument` (invalid parameters for a single level make `Cache` throw).
+
+- `access(address)`: look it up starting at level 0, **going down a level only on a miss**. Return the index of the level that satisfied the access; if every level misses (the access goes to memory), return `levels.size()`. Every level that missed must load the line.
+- `access_range(address, bytes)`: do one `access` for each line that `[address, address + bytes)` covers, and return how many of those lines went to memory. `bytes == 0` does nothing. An 8-byte access that crosses a line boundary touches two lines, and nothing may overflow when `address + bytes - 1` is exactly the top of the address space.
+- `accesses(level)`, `misses(level)`: the number of accesses and misses each level sees. A lower level sees only the misses of the level above it.
 
 ## Stage 2 — Miss-Ratio Curve
 
-`miss_counts(addresses, line_bytes, capacities)`：對 fully-associative LRU，回傳與 `capacities` 同長度的陣列，第 i 項是容量 `capacities[i]` 條 line 時的 miss 數。`capacities` 順序不定，容量 0 代表每次都 miss。
+```cpp
+inline std::vector<std::uint64_t> miss_counts(std::span<const std::uint64_t> addresses,
+                                              std::size_t line_bytes,
+                                              std::span<const std::size_t> capacities);
+```
 
-做法：對每次存取算 **stack distance**：上一次碰這條 line 之後，碰過多少條**不同**的 line（第一次出現則為無限大）。容量 `C` 的 LRU 恰好在距離 `≥ C` 時 miss。
+`miss_counts(addresses, line_bytes, capacities)`: for a fully associative LRU cache, return an array of the same length as `capacities` whose i-th entry is the miss count with a capacity of `capacities[i]` lines. `capacities` may be in any order, and a capacity of 0 means every access misses.
 
-總時間要 **O(n log n)**（n 是存取次數），不可以對每個容量各模擬一次。提示：在「每條 line 最後一次出現的位置」上標 1，兩次出現之間的區間和就是距離，Fenwick tree 剛好做這件事。
+Method: for each access, compute its **stack distance**: how many **distinct** lines have been touched since this line was last touched (infinite for a first occurrence). An LRU cache of capacity `C` misses exactly when the distance is `≥ C`.
 
-## 面試追問
+The total time must be **O(n log n)** (n is the number of accesses); you must not simulate each capacity separately. Hint: put a 1 at "the position where each line last occurred"; the range sum between two occurrences is then the distance, and a Fenwick tree does exactly that.
 
-1. Stack distance 能精確預測 fully-associative LRU，對 set-associative 只是近似，為什麼？
-2. 真實的 L2 通常是 inclusive 或 exclusive，這題的模型是哪一種？差別會反映在哪個計數上？
-3. 為什麼 `-O2` 的程式 instruction count 變少，cachegrind 量到的 miss rate 卻可能變高？用指令數當成本模型有什麼優缺點？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Stack distance predicts a fully associative LRU cache exactly, but only approximates a set-associative one. Why?
+2. Real L2 caches are usually inclusive or exclusive. Which kind is this exercise's model? Which counter would show the difference?
+3. Why can a program compiled with `-O2` execute fewer instructions yet show a higher miss rate in cachegrind? What are the pros and cons of using instruction counts as a cost model?

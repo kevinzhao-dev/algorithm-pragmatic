@@ -1,6 +1,6 @@
 ---
-title: Chained Hash Table（universal hashing）
-unit: 03 · Hashing & Linear Sorting（PS3）
+title: Chained Hash Table (universal hashing)
+unit: 03 · Hashing & Linear Sorting (PS3)
 source: 6.006 Lecture 4, Recitation 4
 pdf: materials/6.006/recitations/rec04.pdf
 read: materials/6.006/lectures/lec04.pdf
@@ -10,51 +10,104 @@ minutes: 75
 
 # 0301 · Chained Hash Table
 
-> **實務上為什麼會遇到**：Python 的 dict、C++ 的 `unordered_map`、資料庫的 hash join，骨子裡都是這個結構。2011 年的 HashDoS 就是攻擊者挑一批 key 把 chain 灌成 linked list，打爆了一堆語言的預設實作；隨機化的 hash family 正是對策。
+**Based on:** [Recitation 4 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/bd220fb629aefdf30f416b5abf45d38d_MIT6_006S20_r04.pdf) · **Read first:** [Lecture 4: Hashing notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ce9e94705b914598ce78a00a70a1f734_MIT6_006S20_lec4.pdf)
 
-自己實作 universal hash 與 chaining hash table，不准用 `std::unordered_map`（chain 可以用 `std::forward_list` 或自己的 linked list）。一次只看一關。
+> **Why this comes up in practice:** Python's dict, C++'s `unordered_map`, and a database's hash join are all this structure at heart. In the 2011 HashDoS attacks, attackers picked a batch of keys that flooded the chains into long linked lists and knocked over the default implementations of a whole list of languages; a randomized hash family is exactly the countermeasure.
+
+## Your task
+
+Implement a universal hash and a chaining hash table yourself. Do not use `std::unordered_map` (a chain may be a `std::forward_list` or your own linked list).
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
 
 ## Stage 1 — Universal hash
 
-`UniversalHash(a, b)` 代表 family 中的一個成員 `h(k) = ((a*k + b) mod p) mod m`，其中 `p = kPrime = 2^61 - 1`。
+```cpp
+class UniversalHash {
+public:
+    static constexpr std::uint64_t kPrime = (std::uint64_t{1} << 61) - 1;
 
-- 建構時檢查 `1 ≤ a < p`、`0 ≤ b < p`，否則丟 `std::invalid_argument`。
-- `operator()(key, buckets)`：`buckets ≥ 1`，key 是任意 `uint64_t`，回傳值要 `< buckets`。
+    UniversalHash(std::uint64_t a, std::uint64_t b);
+    std::size_t operator()(std::uint64_t key, std::size_t buckets) const;
+};
+```
 
-`a*k` 會超過 64 bits，用 `unsigned __int128`。對 Mersenne prime 取餘數有不用 `%` 的快速算法，值得想一下。
+`UniversalHash(a, b)` represents one member of the family, `h(k) = ((a*k + b) mod p) mod m`, where `p = kPrime = 2^61 - 1`.
 
-## Stage 2 — 基本操作
+- The constructor checks `1 ≤ a < p` and `0 ≤ b < p`, and throws `std::invalid_argument` otherwise.
+- `operator()(key, buckets)`: `buckets ≥ 1`, the key can be any `uint64_t`, and the return value must be `< buckets`.
 
-`ChainedHashMap<K, V, Prehash>`（`Prehash` 把 key 變成 `uint64_t`，預設 `std::hash<K>`）：
+`a*k` overflows 64 bits, so use `unsigned __int128`. There is a fast way to reduce modulo a Mersenne prime without `%`, and it's worth thinking about.
 
-| 操作 | 行為 | 複雜度 |
+## Stage 2 — Basic operations
+
+```cpp
+template <typename K, typename V, typename Prehash = std::hash<K>>
+class ChainedHashMap {
+public:
+    explicit ChainedHashMap(std::uint64_t seed = 0x9E3779B97F4A7C15ULL, Prehash prehash = Prehash{});
+
+    ChainedHashMap(const ChainedHashMap&) = delete;
+    ChainedHashMap& operator=(const ChainedHashMap&) = delete;
+
+    bool insert(K key, V value);
+    V* find(const K& key);
+    const V* find(const K& key) const;
+    std::optional<V> erase(const K& key);
+    std::size_t size() const;
+    bool empty() const;
+};
+```
+
+`ChainedHashMap<K, V, Prehash>` (`Prehash` turns a key into a `uint64_t`, and defaults to `std::hash<K>`):
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `explicit ChainedHashMap(seed, prehash)` | 用 `seed` 決定 hash 參數 | O(1) |
-| `insert(k, v)` | 新 key 回傳 `true`；已存在則**覆蓋**並回傳 `false` | 期望 O(1) |
-| `find(k)` | 指向 value 的指標，沒有時 `nullptr` | 期望 O(1) |
-| `erase(k)` | 回傳被移除的 value，沒有時 `std::nullopt` | 期望 O(1) |
+| `explicit ChainedHashMap(seed, prehash)` | `seed` determines the hash parameters | O(1) |
+| `insert(k, v)` | Return `true` for a new key; if the key already exists, **overwrite** its value and return `false` | expected O(1) |
+| `find(k)` | A pointer to the value, or `nullptr` if the key is absent | expected O(1) |
+| `erase(k)` | Return the removed value, or `std::nullopt` if the key is absent | expected O(1) |
 | `size()` / `empty()` | | O(1) |
 
-不可洩漏：解構時要把 key、value 都釋放掉。
+No leaks: the destructor must release every key and value.
 
-## Stage 3 — 動態調整大小
+## Stage 3 — Dynamic resizing
 
-- `bucket_count()`：目前 bucket 數。`load_factor()`：`size / bucket_count`。
-- 任何時刻都要滿足 `size() ≤ bucket_count()`，且 `bucket_count() ≤ 8 × size() + 64`（表要會縮）。
-- **成長和縮小的門檻不能相同**：key 數量在門檻附近來回時，不能每次操作都 rehash。
+```cpp
+// in class ChainedHashMap<K, V, Prehash>
+std::size_t bucket_count() const;
+double load_factor() const;
+```
 
-`insert` / `erase` 要均攤期望 O(1)。
+- `bucket_count()`: the current number of buckets. `load_factor()`: `size / bucket_count`.
+- At all times, both `size() ≤ bucket_count()` and `bucket_count() ≤ 8 × size() + 64` must hold (the table must shrink as well as grow).
+- **The grow and shrink thresholds must not be the same:** when the number of keys hovers around a threshold, you must not rehash on every operation.
 
-## Stage 4 — 對抗性輸入與所有權
+`insert` / `erase` must be amortized expected O(1).
 
-- `bucket_of(k)`：key 目前落在哪個 bucket，`< bucket_count()`。
-- `max_chain_length()`：目前最長的 chain。
-- 不同 seed 要得到不同的分佈。把只有高位不同的 key（例如全是 `2^20` 的倍數）塞進去，最長 chain 要維持很短。
-- 如果 `Prehash` 把所有 key 都映到同一個值，還是要正確運作（只是變慢）。
-- move constructor / move assignment：要 `noexcept`，被移走的表變空，之後仍可再插入。
+## Stage 4 — Adversarial input and ownership
 
-## 面試追問
+```cpp
+// in class ChainedHashMap<K, V, Prehash>
+ChainedHashMap(ChainedHashMap&& other);             // should be noexcept once implemented
+ChainedHashMap& operator=(ChainedHashMap&& other);  // should be noexcept once implemented
 
-1. 期望 O(1) 的「期望」是對什麼取的？對輸入嗎？攻擊者知道你用的 family 時還成立嗎？
-2. `erase` 也要縮表，為什麼？若門檻設在 `n < m/2` 會發生什麼？
-3. `prehash` 把字串打成 64 bits 後才進 universal hash：為什麼這不算破壞 universal 的保證？（或它其實破壞了什麼？）
+std::size_t bucket_of(const K& key) const;
+std::size_t max_chain_length() const;
+```
+
+- `bucket_of(k)`: the bucket the key currently falls in, `< bucket_count()`.
+- `max_chain_length()`: the length of the longest chain right now.
+- Different seeds must produce different distributions. If you insert keys that differ only in their high bits (for example, all multiples of `2^20`), the longest chain must stay short (the tests insert 20,000 multiples of `2^20` through an identity prehash and allow a longest chain of at most 32).
+- If `Prehash` maps every key to the same value, the table must still work correctly (just more slowly).
+- Move constructor / move assignment: these must be `noexcept`. The moved-from table becomes empty and can still take inserts afterwards.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. In "expected O(1)", what is the expectation taken over? The input? Does it still hold when an attacker knows which family you use?
+2. Why must `erase` shrink the table too? What happens if the shrink threshold is `n < m/2`?
+3. `prehash` squeezes a string into 64 bits before it reaches the universal hash. Why doesn't this count as breaking the universal guarantee? (Or what does it actually break?)

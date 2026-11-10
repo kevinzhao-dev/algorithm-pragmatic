@@ -1,6 +1,6 @@
 ---
-title: 括號化與 Matrix Chain（區間 DP）
-unit: 08 · Dynamic Programming II（PS8）
+title: Parenthesization and Matrix Chain (interval DP)
+unit: 08 · Dynamic Programming II (PS8)
 source: 6.006 Lecture 17
 pdf: materials/6.006/lectures/lec17.pdf
 read: materials/6.006/lectures/lec17.pdf
@@ -8,46 +8,65 @@ kind: code
 minutes: 85
 ---
 
-# 0804 · 括號化與 Matrix Chain
+# 0804 · Parenthesization and Matrix Chain
 
-> **實務上為什麼會遇到**：`numpy.linalg.multi_dot`、`opt_einsum` 和 SQL optimizer 的 join ordering 都在決定「運算的順序」。子問題是連續區間，答案靠列舉最後一刀切在哪；正負號一進來，子問題還得把「最小值」一起記下，因為兩個負數相乘可能變成最大值。
+**Based on:** [Lecture 17: Dynamic Programming, Part 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/665523227a175e9e9ce26ea8d3e5b51c_MIT6_006S20_lec17.pdf) · **Read first:** [Lecture 17: Dynamic Programming, Part 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/665523227a175e9e9ce26ea8d3e5b51c_MIT6_006S20_lec17.pdf)
 
-輸入是一串運算元和它們之間的運算子：`operands.size() == ops.size() + 1`，`ops` 的每個字元是 `'+'` 或 `'*'`。你可以任意加括號（改變計算順序），但運算元和運算子的左右順序不能動。保證任何加括號方式的計算結果都放得進 `std::int64_t`。
+> **Why this comes up in practice:** `numpy.linalg.multi_dot`, `opt_einsum`, and the join ordering in a SQL optimizer all decide "the order of operations". A subproblem is a contiguous range, and the answer comes from trying every position for the last cut; once signs come into play, each subproblem must also record its minimum, because the product of two negative numbers can turn into the maximum.
 
-`operands` 空、`ops` 長度不對或含其他字元時丟 `std::invalid_argument`。
+## Your task
 
-一次只看一關，做完再往下讀。
+The input is a sequence of operands with an operator between each pair: `operands.size() == ops.size() + 1`, and each character of `ops` is `'+'` or `'*'`. You may add parentheses however you like (changing the order of evaluation), but the left-to-right order of the operands and operators must not change. Every possible parenthesization is guaranteed to evaluate to a value that fits in `std::int64_t`.
 
-## Stage 1 — 非負運算元的最大值
+Throw `std::invalid_argument` when `operands` is empty, or when `ops` has the wrong length or contains any other character.
 
-`std::int64_t max_value(std::span<const std::int64_t> operands, std::string_view ops)`：`operands` 都 ≥ 0，回傳加括號之後能算出的最大值。O(n³) 時間。
+Lecture 17 solves arithmetic parenthesization with negative numbers allowed. Here you work up to it from non-negative operands, print the best parenthesization, and then apply the same interval DP to matrix-chain multiplication.
 
-## Stage 2 — 允許負數
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`operands` 可以是負數（函式不變）。只記最大值不夠了：想想兩個區間的最大值相乘，什麼時候不是整體的最大值。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 3 — 還原括號
+## Stage 1 — The maximum with non-negative operands
 
-`std::string best_parenthesization(std::span<const std::int64_t> operands, std::string_view ops)`：回傳達到最大值的一種加括號方式，格式固定為：
+```cpp
+std::int64_t max_value(std::span<const std::int64_t> operands, std::string_view ops);
+```
 
-- 單一運算元：寫成十進位，負數帶 `-`，例如 `-3`。
-- 每次運算都包一層括號：`(左式+右式)` 或 `(左式*右式)`，沒有空白。
+`std::int64_t max_value(std::span<const std::int64_t> operands, std::string_view ops)`: the `operands` are all ≥ 0; return the largest value that any parenthesization can produce. O(n³) time.
 
-例如 `(1+(2*-3))`。
+## Stage 2 — Allowing negative numbers
 
-## Stage 4 — 實務延伸：Matrix Chain
+`operands` may now be negative (the function stays the same). Recording only the maximum is no longer enough: think about when multiplying the maxima of two ranges doesn't give the overall maximum.
 
-`dims` 代表 `n = dims.size() − 1` 個矩陣相乘，第 `i` 個矩陣大小是 `dims[i] × dims[i+1]`（`dims` 皆為正，`dims.size() ≥ 2`，否則丟 `std::invalid_argument`）。把大小 `a×b` 和 `b×c` 兩個矩陣相乘的成本算作 `a·b·c`。
+## Stage 3 — Recovering the parentheses
+
+```cpp
+std::string best_parenthesization(std::span<const std::int64_t> operands,
+                                  std::string_view ops);
+```
+
+`std::string best_parenthesization(std::span<const std::int64_t> operands, std::string_view ops)`: return one parenthesization that reaches the maximum, in exactly this format:
+
+- A single operand: written in decimal, with a `-` for a negative number, for example `-3`.
+- Every operation gets its own pair of parentheses: `(left+right)` or `(left*right)`, with no spaces.
+
+For example, `(1+(2*-3))`.
+
+## Stage 4 — Real-world extension: Matrix Chain
+
+`dims` describes a product of `n = dims.size() − 1` matrices, where matrix `i` has size `dims[i] × dims[i+1]` (every entry of `dims` is positive and `dims.size() ≥ 2`; otherwise throw `std::invalid_argument`). Multiplying an `a×b` matrix by a `b×c` matrix costs `a·b·c`.
 
 ```cpp
 std::int64_t min_multiplications(std::span<const std::int64_t> dims);
 std::string best_multiplication_order(std::span<const std::int64_t> dims);
 ```
 
-回傳最小總成本，以及達成它的相乘順序，格式：單一矩陣寫 `M{i}`（`i` 是十進位索引），相乘寫 `(左式*右式)`，例如 `((M0*M1)*M2)`。O(n³) 時間。
+Return the minimum total cost, and a multiplication order that achieves it, in this format: a single matrix is written `M{i}` (where `i` is its decimal index), and a product is written `(left*right)`, for example `((M0*M1)*M2)`. O(n³) time.
 
-## 面試追問
+## Interview follow-ups
 
-1. Stage 2 的子問題為什麼是 O(n²) 而不是更多？relation 要看幾種組合？
-2. 把「最後一刀」當子問題和用「第一刀」，哪個在這裡比較自然？還原解時的樹長什麼樣？
-3. `opt_einsum` 在張量數量很多時不會跑完整的 DP。它改用什麼？犧牲了什麼？
+Once you're done, answer without looking at your code:
+
+1. Why does Stage 2 have O(n²) subproblems and not more? How many combinations does the relation have to look at?
+2. Which is more natural here, building the subproblem around the last cut or around the first cut? What does the tree look like when you recover the solution?
+3. With many tensors, `opt_einsum` doesn't run the full DP. What does it use instead, and what does it give up?

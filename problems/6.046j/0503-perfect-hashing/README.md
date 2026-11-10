@@ -1,6 +1,6 @@
 ---
-title: Perfect Hashing（FKS 兩層雜湊）
-unit: 05 · Skip Lists、Hashing 與 DP（PS5）
+title: Perfect Hashing (two-level FKS hashing)
+unit: 05 · Skip Lists, Hashing, and DP (PS5)
 source: 6.046J Lecture 8
 pdf: materials/6.046j/lectures/lec08.pdf
 read: materials/6.046j/lectures/lec08.pdf
@@ -10,37 +10,84 @@ minutes: 100
 
 # 0503 · Perfect Hashing
 
-> **實務上為什麼會遇到**：路由表、語言關鍵字表、唯讀的特徵開關，資料在建好之後就不再變動，但查詢量極大。與其接受平均 O(1)，不如在建表時多花點時間，換來最壞情況只碰兩格記憶體。
+**Based on:** [Randomization: Universal & Perfect Hashing](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/5e4c05ec33ad4e733c1e6a247f21d1de_MIT6_046JS15_lec08.pdf) · **Read first:** [Randomization: Universal & Perfect Hashing](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/5e4c05ec33ad4e733c1e6a247f21d1de_MIT6_046JS15_lec08.pdf)
 
-用 [`0502`](../0502-universal-hashing/README.md) 的 `LinearHash` 概念（可以把程式複製過來），做一個靜態字典 `PerfectHashMap<V>`。
+> **Why this comes up in practice:** routing tables, language keyword tables, and read-only feature flags never change once they are built, but they are queried enormously often. Rather than settle for O(1) on average, spend a little more time building the table and get a worst case that touches only two memory slots.
 
-## Stage 1 — 建表
+## Your task
 
-`PerfectHashMap(items, seed)`：`items` 是 `(key, value)`，key `< kHashPrime`。key 重複或超出範圍時丟 `std::invalid_argument`。**重複的 key 如果沒先擋掉，不管怎麼挑雜湊函數都會一直碰撞，程式就會永遠跑不完。**
+Using the idea behind `LinearHash` from [`0502`](../0502-universal-hashing/README.md) (you may copy the code over), build a static dictionary, `PerfectHashMap<V>`.
 
-第一層把 `n` 個 key 雜湊到 `n` 個桶，第 `j` 桶有 `l_j` 個 key。不斷重抽第一層函數，直到 `Σ l_j² ≤ 4n`。
+You build the two-level FKS scheme from Lecture 8, first level and then second level, and then wrap it into a dictionary with string keys.
 
-`total_slots()`：回傳第二層的總格數，也就是 `Σ l_j²`，必須 `≤ 4n`。`seed` 決定所有隨機選擇，同一輸入與種子要得到相同結果。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 2 — 第二層與查詢
+## Stage 1 — Building the table
 
-第 `j` 桶配置 `l_j²` 格，為它挑一個第二層函數，不斷重抽直到桶內 **完全沒有碰撞**。
+```cpp
+inline constexpr std::uint64_t kHashPrime = (std::uint64_t{1} << 61) - 1;  // provided
 
-- `find(key)`：回傳值的指標，不存在回傳 `nullptr`，`contains` 同理。不在建表集合裡的 key（包括 `≥ kHashPrime`）都要正確回報不存在，所以格子裡要存 key 才能比對。
-- `probes()`：累積檢視過多少格子，**每次查詢不得超過 2**（第一層一格、第二層一格），不能有鏈結。測試會驗每一次。
+template <typename V>
+class PerfectHashMap {
+public:
+    using Item = std::pair<std::uint64_t, V>;
 
-## Stage 3 — 實務延伸：字串字典
+    explicit PerfectHashMap(std::vector<Item> items, std::uint64_t seed = 6046);
 
-`StaticStringMap<V>(items, seed)`：key 是字串，重複時丟 `std::invalid_argument`。
+    std::size_t size() const;
+    std::size_t total_slots() const;
+};
+```
 
-用隨機底數的多項式雜湊把字串轉成 61 位元指紋，再交給 `PerfectHashMap`。兩點容易忽略：
+`PerfectHashMap(items, seed)`: `items` are `(key, value)` pairs with key `< kHashPrime`. Throw `std::invalid_argument` if a key is duplicated or out of range. **If you don't reject duplicate keys up front, they collide under every hash function you could pick, and the program never finishes.**
 
-- 指紋有機率碰撞：建表時發現不同字串指紋相同，就換一個底數重來。
-- `find(key)` 要比對完整字串，否則不在字典裡的字串可能撞到指紋而誤判為存在。
-- 長度不同的 NUL 字串也要能區分（想想指紋的起始值和位元組的編碼）。
+The first level hashes the `n` keys into `n` buckets, with `l_j` keys in bucket `j`. Keep drawing a new first-level function until `Σ l_j² ≤ 4n`.
 
-## 面試追問
+`total_slots()`: return the total number of second-level slots, that is, `Σ l_j²`, which must be `≤ 4n`. `seed` determines every random choice, so the same input and seed must give the same result.
 
-1. 第一層為什麼 `Σ l_j²` 的期望是 O(n)？用指示變數和 universal 的定義算一次。第二層為什麼一定要 `l_j²` 而不是 `l_j`？
-2. 建表的期望時間是多少？隨機重試的次數為什麼可以用幾何分布估計？
-3. 如果 key 偶爾要更新，動態完美雜湊（Dietzfelbinger）的思路是什麼？這個結構與 Cuckoo hashing 比，取捨在哪裡？
+## Stage 2 — The second level and lookups
+
+```cpp
+// in class PerfectHashMap<V>
+const V* find(std::uint64_t key) const;
+bool contains(std::uint64_t key) const;
+
+// Cost model used by the tests: the number of table slots examined so far.
+std::uint64_t probes() const;
+```
+
+Give bucket `j` a table of `l_j²` slots and pick a second-level function for it, drawing again until the bucket has **no collisions at all**.
+
+- `find(key)`: return a pointer to the value, or `nullptr` if the key is absent; `contains` works the same way. Any key outside the set the table was built from (including keys `≥ kHashPrime`) must be correctly reported as absent, so the slots must store the keys for comparison.
+- `probes()`: the total number of slots examined so far. **Each lookup may examine at most 2** (one slot in the first level and one in the second), with no chaining. The tests check every single lookup.
+
+## Stage 3 — Real-world extension: a string dictionary
+
+```cpp
+template <typename V>
+class StaticStringMap {
+public:
+    using Item = std::pair<std::string, V>;
+
+    explicit StaticStringMap(std::vector<Item> items, std::uint64_t seed = 6046);
+
+    std::size_t size() const;
+    const V* find(std::string_view key) const;
+};
+```
+
+`StaticStringMap<V>(items, seed)`: the keys are strings; throw `std::invalid_argument` on duplicates.
+
+Turn each string into a 61-bit fingerprint with a polynomial hash whose base is random, then hand the fingerprints to `PerfectHashMap`. These points are easy to overlook:
+
+- Fingerprints can collide: if you find, while building the table, that two different strings have the same fingerprint, switch to another base and start over.
+- `find(key)` must compare the full string; otherwise a string that isn't in the dictionary might hit a matching fingerprint and be wrongly reported as present.
+- Strings of NUL characters with different lengths must also be told apart (think about the fingerprint's starting value and how bytes are encoded).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the expectation of `Σ l_j²` at the first level O(n)? Work it out once with indicator variables and the definition of universal. Why must the second level use `l_j²` slots rather than `l_j`?
+2. What is the expected time to build the table? Why can the number of random retries be estimated with a geometric distribution?
+3. If keys occasionally need to be updated, what is the idea behind dynamic perfect hashing (Dietzfelbinger)? How does this structure trade off against cuckoo hashing?

@@ -1,6 +1,6 @@
 ---
-title: 攻擊 Hash Family（誰能保證碰撞）
-unit: 03 · Hashing & Linear Sorting（PS3）
+title: Attacking Hash Families (who can guarantee a collision)
+unit: 03 · Hashing & Linear Sorting (PS3)
 source: 6.006 PS3 Problem 3-2
 pdf: materials/6.006/psets/ps3/questions.pdf
 answer: materials/6.006/psets/ps3/solutions.pdf
@@ -9,41 +9,86 @@ kind: code
 minutes: 50
 ---
 
-# 0312 · 攻擊 Hash Family
+# 0312 · Attacking Hash Families
 
-> **實務上為什麼會遇到**：分散式系統的路由 hash 如果是公開的，而 key 又由使用者決定（自選的 session id、URL），攻擊者就能把流量全灌到同一台機器。這題就是當攻擊者：對每個 family 想辦法**在 hash 函數被抽出來之前**挑好一批必定相撞的 key。
+**Original problem:** [Problem Set 3 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/03a34fcf3012a242ffcae5534e9fa511_MIT6_006S20_ps3-questions.pdf) · **Read first:** [Lecture 4: Hashing notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ce9e94705b914598ce78a00a70a1f734_MIT6_006S20_lec4.pdf), [Recitation 4 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/bd220fb629aefdf30f416b5abf45d38d_MIT6_006S20_r04.pdf)
 
-服務會在一個 family 中隨機抽一個 hash 函數把 key 打到 `n` 個 bucket，但**key 由攻擊者先選好**。key 是 `[1, u)` 中的正整數，所有函數裡 `n ≥ 2`。原題是證明題，這裡把攻擊寫成程式，答案用窮舉所有函數驗證。
+> **Why this comes up in practice:** if a distributed system's routing hash is public and users decide the keys (a self-chosen session id, a URL), an attacker can pour all the traffic onto a single machine. In this exercise you are the attacker: for each family, find a way to pick a batch of keys that are certain to collide **before the hash function is drawn**.
+
+## Original problem
+
+6.006 PS3 Problem 3-2 is about picking keys before the hash function is chosen. A university houses 2n incoming students in n rooms, labeled 0 through n − 1. Every student's ID is distinct and is a positive integer below u (with u ≫ 2n), and new students get to pick their own IDs. The university announces a hash family H before anyone picks an ID; once the IDs are fixed, it draws one function from H uniformly at random and sends each student to the room their ID hashes to. Two freshmen want to room together. For each family below, either give IDs k1 and k2 they can pick that guarantee they become roommates, or prove that no such pair exists and work out the best probability of sharing a room that they can reach.
+
+- (a) H = { h_ab(k) = (ak + b) mod n | a, b ∈ {0, …, n − 1} and a ≠ 0 }.
+- (b) H = { h_a(k) = (⌊kn/u⌋ + a) mod n | a ∈ {0, …, u − 1} }.
+- (c) H = { h_ab(k) = ((ak + b) mod p) mod n | a, b ∈ {0, …, p − 1} and a ≠ 0 } for a fixed prime p > u (Lecture 4's universal family).
+
+## Your task
+
+A service draws a random hash function from a family to map keys into `n` buckets, but **the attacker picks the keys first**. Keys are positive integers in `[1, u)`, and `n ≥ 2` in every function. The original is a proof problem; here you write the attack as code, and your answers are verified by enumerating every function in the family. Stages 1–3 cover parts (a)–(c), and Stage 4 goes beyond the original by generating whole batches of colliding keys.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Linear family
 
-`h_ab(k) = (a·k + b) mod n`，`a, b ∈ {0, …, n-1}` 且 `a ≠ 0`。
+```cpp
+using KeyPair = std::pair<std::uint64_t, std::uint64_t>;
 
-`break_linear_family(n, u)`：回傳兩個相異 key，對 family 裡**每一個**函數都相撞；若 `[1, u)` 裡不存在這樣的 key 對，回傳 `std::nullopt`。
+inline std::optional<KeyPair> break_linear_family(std::uint64_t n, std::uint64_t u);
+```
+
+`h_ab(k) = (a·k + b) mod n`, where `a, b ∈ {0, …, n-1}` and `a ≠ 0`.
+
+`break_linear_family(n, u)`: return two distinct keys that collide under **every** function in the family. If no such pair of keys exists in `[1, u)`, return `std::nullopt`. `n` and `u` can be huge (the tests use `n = 2^30` and `u = 2^62`), so don't search for the pair.
 
 ## Stage 2 — Bucket family
 
-`h_a(k) = (⌊k·n/u⌋ + a) mod n`，`a ∈ {0, …, u-1}`。
+```cpp
+inline std::optional<KeyPair> break_bucket_family(std::uint64_t n, std::uint64_t u);
+```
 
-`break_bucket_family(n, u)`：規格同上。`n` 最大到 `2^31`，`u` 可以到 `2^62`，不可以把 `[1, u)` 掃過一遍（也不可以讓 `k·n` 溢位）。
+`h_a(k) = (⌊k·n/u⌋ + a) mod n`, where `a ∈ {0, …, u-1}`.
 
-## Stage 3 — Universal family 的極限
+`break_bucket_family(n, u)`: same contract as above. `n` goes up to `2^31` and `u` up to `2^62`, so you must not scan `[1, u)` (and you must not let `k·n` overflow).
 
-`h_ab(k) = ((a·k + b) mod p) mod n`，`p` 為質數（`2 ≤ n ≤ p < 2^31`），`a ∈ {1, …, p-1}`、`b ∈ {0, …, p-1}`。
+## Stage 3 — The limits of the universal family
 
-這題你保證不了碰撞，只能算機率。`universal_collision_probability(p, n)` 回傳兩個相異 key（`< p`）相撞的**精確機率**，以最簡分數 `Fraction{num, den}` 表示（`0` 的最簡分數是 `{0, 1}`）。
+```cpp
+struct Fraction {
+    std::uint64_t num = 0;
+    std::uint64_t den = 1;
+    friend bool operator==(const Fraction&, const Fraction&) = default;
+};
 
-提示：對固定的兩個相異 key，當 `(a, b)` 跑遍 family 時，`(a·k1 + b mod p, a·k2 + b mod p)` 會跑過哪些配對？這個機率會不會隨 key 而變？用 `p = q·n + t` 寫成封閉解，不要枚舉。
+inline Fraction universal_collision_probability(std::uint64_t p, std::uint64_t n);
+```
 
-## Stage 4 — 實務延伸：Flood key 產生器
+`h_ab(k) = ((a·k + b) mod p) mod n`, where `p` is prime (`2 ≤ n ≤ p < 2^31`), `a ∈ {1, …, p-1}`, and `b ∈ {0, …, p-1}`.
 
-- `flood_linear(n, u, count)`：回傳 `count` 個 `[1, u)` 中相異的 key，對 linear family 的**每個**函數都落在同一個 bucket。
-- `flood_bucket(n, u, count)`：同上，對 bucket family。
+Here you can't guarantee a collision; you can only compute its probability. `universal_collision_probability(p, n)` returns the **exact probability** that two distinct keys (`< p`) collide, as a fraction in lowest terms, `Fraction{num, den}` (in lowest terms, `0` is `{0, 1}`).
 
-不存在這樣 `count` 個 key 時回傳空 vector（`count == 0` 也回傳空）。這就是實際的 flood 攻擊資料；對照組在測試裡：同一批 key 進 universal family 就散開了。
+Hint: for two fixed distinct keys, which pairs does `(a·k1 + b mod p, a·k2 + b mod p)` run through as `(a, b)` ranges over the family? Does the probability depend on the keys? Write it in closed form using `p = q·n + t`; don't enumerate.
 
-## 面試追問
+## Stage 4 — Real-world extension: flood key generator
 
-1. Stage 3 的機率為什麼是所有 key 對都一樣？對應到「universal」定義的哪一步？
-2. 真實系統的 hash 是 SipHash + 隨機 seed，而不是 `(ak+b) mod p`，差別是什麼？
-3. 如果攻擊者可以**觀察**自己的 key 被分到哪裡（例如從回應延遲推測），universal hash 的保證還成立嗎？
+```cpp
+inline std::vector<std::uint64_t> flood_linear(std::uint64_t n, std::uint64_t u, std::size_t count);
+inline std::vector<std::uint64_t> flood_bucket(std::uint64_t n, std::uint64_t u, std::size_t count);
+```
+
+- `flood_linear(n, u, count)`: return `count` distinct keys in `[1, u)` that land in the same bucket under **every** function of the linear family.
+- `flood_bucket(n, u, count)`: the same, for the bucket family.
+
+If no such `count` keys exist, return an empty vector (also return an empty one when `count == 0`). As in Stage 2, `u` can be huge (up to `2^50` in the tests), so don't enumerate `[1, u)`. This is real flood-attack data. The control group is in the tests: the same keys spread out under the universal family.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the Stage 3 probability the same for every pair of keys? Which step of the definition of "universal" does that correspond to?
+2. Real systems hash with SipHash plus a random seed rather than `(ak+b) mod p`. What's the difference?
+3. If the attacker can **observe** where their own keys land (for example, by inferring it from response latency), does the guarantee of universal hashing still hold?
+
+---
+
+**Official solution:** [Problem Set 3 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9aede1539e086a709a75d604a89f08b6_MIT6_006S20_ps3-solutions.pdf). Read it after you finish.

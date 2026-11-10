@@ -1,6 +1,6 @@
 ---
-title: 同步網路演算法（Leader、BFS Tree、MIS、Bellman-Ford）
-unit: 10 · Distributed Algorithms（PS10）
+title: Synchronous Network Algorithms (leader, BFS tree, MIS, Bellman-Ford)
+unit: 10 · Distributed Algorithms (PS10)
 source: 6.046J Lecture 19, Recitation 10
 pdf: materials/6.046j/lectures/lec19.pdf
 read: materials/6.046j/lectures/lec19.pdf, materials/6.046j/recitations/rec10.pdf
@@ -8,39 +8,121 @@ kind: code
 minutes: 140
 ---
 
-# 1001 · 同步網路演算法
+# 1001 · Synchronous Network Algorithms
 
-> **實務上為什麼會遇到**：分散式資料庫的 leader、資料中心網路的 spanning tree、把 token 指派給獨立集合的工作排程，都建立在這幾個基本協定上。同步模型把時序的混亂拿掉，讓你先專心看「每一輪傳什麼、誰可以判斷結束」。
+**Based on:** [Synchronous Distributed Algorithms: Symmetry-breaking. Shortest-paths Spanning Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/662439afce08e29eda88612482506f78_MIT6_046JS15_lec19.pdf) · **Read first:** [Synchronous Distributed Algorithms: Symmetry-breaking. Shortest-paths Spanning Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/662439afce08e29eda88612482506f78_MIT6_046JS15_lec19.pdf), [More Distributed Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/2218648e1afd6e487e114d451aa54e2d_MIT6_046JS15_Recitation10.pdf)
 
-全部用 `_shared/06_net_sim.hpp` 的 `netsim::SyncNetwork` 執行，**不要自己寫訊息傳遞**。協定寫成 class：宣告 `using Message = ...`，實作 `send(round, outbox)`、`receive(round, inbox)`、`halted()`（介面見標頭）。process 只知道自己的 port 數，不知道 vertex 編號。
+> **Why this comes up in practice:** the leader of a distributed database, the spanning tree of a data center network, and job scheduling that hands tokens to an independent set are all built on these basic protocols. The synchronous model takes away the chaos of timing, so you can first focus on "what gets sent in each round, and who can tell that it's over".
 
-一次只看一關。測試會驗證結果**與訊息量**（`stats.messages`）。
+## Your task
 
-## Stage 1 — Clique 上的 Leader Election
+Everything runs on `netsim::SyncNetwork` from `_shared/06_net_sim.hpp`; **do not write your own message passing**. Each protocol is a class: declare `using Message = ...` and implement `send(round, outbox)`, `receive(round, inbox)`, and `halted()` (see the header for the interface). A process knows only how many ports it has, not its vertex number.
 
-`CliqueLeader(std::int64_t uid)`，UID 互不相同。第一輪廣播 UID，收到全部 UID 後，最大 UID 當 leader（`is_leader()`）。一輪結束、`halted()` 為 true。
+The tests check the results **and the number of messages** (`stats.messages`).
 
-## Stage 2 — BFS Spanning Tree 與 Convergecast
+You implement four synchronous protocols from Lecture 19 and Recitation 10, each as a process class that the simulator runs.
 
-`BfsTree(bool is_root)`，連通圖、不知道 n。`search` 訊息從 root 往外擴散。收到第一個 search 時選擇 parent、回覆 `parent`，其餘 search 回覆 `nonparent`。**不要用 UID**。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `parent_port()`：parent 的 port（root 或尚未加入時為 -1）。
-- `children_ports()`：回傳子節點的 ports，升冪。
-- `depth()`：root 為 0。
-- convergecast：葉節點開始往上送 `done`，root 收齊後 `finished()` 回傳 true，所有節點在送出（或收齊）`done` 之後 `halted()`。
+Read one stage at a time.
 
-訊息總量必須 ≤ `4E + n`。回合數 O(diam)。
+## Stage 1 — Leader election in a clique
 
-## Stage 3 — Luby 的 Maximal Independent Set
+```cpp
+class CliqueLeader {
+public:
+    using Message = std::int64_t;
+    explicit CliqueLeader(std::int64_t uid);
 
-`Luby(std::uint64_t seed, std::uint64_t n_upper)`。每個 phase 兩輪：第一輪 active 節點廣播 `1..n⁵`（用 `n_upper`）內的隨機值，比所有鄰居都大的節點加入 MIS；第二輪加入者廣播通知，收到通知者退出。決定了的節點 halt。`decided()`、`in_mis()`。
+    void send(std::int64_t round, netsim::Outbox<Message>& out);
+    void receive(std::int64_t round, std::span<const std::optional<Message>> inbox);
+    bool halted() const;
+    bool is_leader() const;
+};
+```
+
+`CliqueLeader(std::int64_t uid)`, with distinct UIDs. In the first round, broadcast your UID; once all the UIDs have arrived, the largest UID becomes the leader (`is_leader()`). After that one round, `halted()` is true.
+
+## Stage 2 — BFS spanning tree and convergecast
+
+```cpp
+class BfsTree {
+public:
+    struct Message {
+        int kind = 0;   // define your own message types
+        int depth = 0;
+    };
+    explicit BfsTree(bool is_root);
+
+    void send(std::int64_t round, netsim::Outbox<Message>& out);
+    void receive(std::int64_t round, std::span<const std::optional<Message>> inbox);
+    bool halted() const;
+
+    int parent_port() const;
+    std::vector<int> children_ports() const;
+    int depth() const;
+    bool finished() const;
+};
+```
+
+`BfsTree(bool is_root)`: the graph is connected, and n is unknown. `search` messages spread outward from the root. On receiving its first search, a process chooses its parent and replies `parent`; it replies `nonparent` to every other search. **Do not use UIDs**.
+
+- `parent_port()`: the parent's port (-1 for the root, or before the process has joined).
+- `children_ports()`: return the children's ports, in increasing order.
+- `depth()`: the hop distance from the root (0 for the root).
+- Convergecast: starting from the leaves, send `done` upward. Once the root has collected all of them, `finished()` returns true, and every node is `halted()` after it has sent (or collected all) `done` messages.
+
+The total number of messages must be ≤ `4E + n`. O(diam) rounds: the tests require the whole run, until every process has halted, to take at most `3·ecc + 8` rounds, where ecc is the largest hop distance from the root.
+
+## Stage 3 — Luby's maximal independent set
+
+```cpp
+class Luby {
+public:
+    struct Message {
+        bool joined = false;
+        std::uint64_t value = 0;
+    };
+    Luby(std::uint64_t seed, std::uint64_t n_upper);
+
+    void send(std::int64_t round, netsim::Outbox<Message>& out);
+    void receive(std::int64_t round, std::span<const std::optional<Message>> inbox);
+    bool halted() const;
+
+    bool decided() const;
+    bool in_mis() const;
+};
+```
+
+`Luby(std::uint64_t seed, std::uint64_t n_upper)`. Each phase has two rounds. In the first, every active node broadcasts a random value in `1..n⁵` (using `n_upper`), and a node whose value is larger than all of its neighbors' joins the MIS. In the second, the nodes that joined broadcast a notice, and every node that receives one drops out. A node halts once it has decided. `decided()`, `in_mis()`.
+
+The simulator stops calling a process once it has halted, so a node that joins must stay active through the second round to broadcast its notice: joiners and the nodes they notify become decided (and halt) at the end of that round. The tests require every node to be decided at the end, and the run to finish within `12·⌈lg max(n, 2)⌉ + 12` phases (`stats.rounds / 2`).
 
 ## Stage 4 — Synchronous Bellman-Ford
 
-`SyncBellmanFord(bool is_root, std::vector<long long> port_weights, int rounds)`：`port_weights[p]` 是 port p 那條邊的權重（非負）。每一輪對所有 port 廣播目前距離，收到後 relax。跑滿 `rounds` 輪就 halt。`distance()` 回傳距離（不可達為 `kInf`，標頭定義）、`parent_port()`。
+```cpp
+inline constexpr long long kInf = std::numeric_limits<long long>::max() / 4;
 
-## 面試追問
+class SyncBellmanFord {
+public:
+    using Message = long long;
+    SyncBellmanFord(bool is_root, std::vector<long long> port_weights, int rounds);
 
-1. 為什麼 BFS tree 這樣做一定是 shortest path tree？如果 search 訊息的延遲不同（不同步）還成立嗎？
-2. Luby 演算法期望幾個 phase 結束？每個 phase 砍掉一半 edge 的直覺是什麼？
-3. Convergecast 的 `done` 為什麼要等「所有鄰居都回應」才能往上送？少了這個條件會發生什麼事？
+    void send(std::int64_t round, netsim::Outbox<Message>& out);
+    void receive(std::int64_t round, std::span<const std::optional<Message>> inbox);
+    bool halted() const;
+
+    long long distance() const;
+    int parent_port() const;
+};
+```
+
+`SyncBellmanFord(bool is_root, std::vector<long long> port_weights, int rounds)`: `port_weights[p]` is the (nonnegative) weight of the edge on port p. Every round, broadcast your current distance on all ports, then relax with what you receive. Halt once all `rounds` rounds have run. `distance()` returns the distance (`kInf` if unreachable, defined in the header), and `parent_port()` the parent's port (-1 for the root).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the BFS tree built this way always a shortest-path tree? Does that still hold if search messages have different delays (no synchrony)?
+2. How many phases does Luby's algorithm take in expectation? What is the intuition for each phase removing half of the edges?
+3. Why must convergecast wait until "every neighbor has responded" before sending `done` upward? What happens without that condition?

@@ -1,6 +1,6 @@
 ---
-title: 最長遞增區段的計數（串流版）
-unit: 00 · Warm-up（PS0）
+title: Counting Longest Increasing Runs (streaming version)
+unit: 00 · Warm-up (PS0)
 source: 6.006 PS0 Problem 0-6
 pdf: materials/6.006/psets/ps0/questions.pdf
 answer: materials/6.006/psets/ps0/solutions.pdf
@@ -8,40 +8,90 @@ kind: code
 minutes: 35
 ---
 
-# 0016 · 最長遞增區段的計數
+# 0016 · Counting Longest Increasing Runs
 
-> **實務上為什麼會遇到**：監控系統要找「latency 連續上升」最長維持了多久、發生過幾次，再決定要不要告警。資料是不斷流進來的時間序列，不可能把歷史全部留著重新掃。
+**Original problem:** [Problem Set 0 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/60f0a029ab154553cad51b54cc25605b_MIT6_006S20_ps0-questions.pdf)
 
-原題：給定一個整數陣列，找出**嚴格遞增的連續子陣列**中最長的長度，回傳具有這個最長長度的子陣列有幾個（細節見 PDF 第 1 頁）。空陣列回傳 0。
+> **Why this comes up in practice:** a monitoring system needs to know the longest stretch of "latency rising steadily" and how many times it has happened before it decides whether to alert. The data is a time series that keeps streaming in, so you can't keep the whole history around and rescan it.
 
-## Stage 1 — 陣列版
+## Original problem
 
-`count_longest_runs<T>(values)`：`values` 是 `std::span<const T>`，一次掃描，**O(n)**。空陣列回傳 0。
+6.006 PS0 Problem 0-6 is the one coding problem in PS0. It defines an "increasing subarray" of an integer array as a contiguous stretch of the array in which every value is larger than the one before it.
 
-相鄰元素相等時，遞增區段就斷開（嚴格遞增）。
+- Write `count_long_subarrays(A)`. It receives a tuple A = (a0, a1, …, an−1) of n > 0 positive integers and returns how many increasing subarrays of A are as long as the longest one.
+- Example: for A = (1, 3, 4, 2, 7, 5, 6, 9, 8), the longest increasing subarrays have length 3, and there are two of them, (1, 3, 4) and (5, 6, 9), so the answer is 2.
 
-## Stage 2 — 串流版
+Implement it in the Python template, which comes with a few test cases.
 
-資料是一筆一筆進來的。`RunTracker<T, Less>`（比較器預設 `std::less<T>`）：
+## Your task
 
-- `push(value)`：**O(1)**，且不可用任何額外的 heap 記憶體（不能把資料存起來）。
-- `longest()`：目前為止最長的嚴格遞增區段長度，還沒有資料時為 0。
-- `count()`：長度等於 `longest()` 的區段有幾個，還沒有資料時為 0。
-- `current()`：以最新一筆資料結尾的遞增區段長度，還沒有資料時為 0。
+The original problem: given an integer array, find the greatest length among its **strictly increasing contiguous subarrays**, and return how many subarrays have that greatest length (the details are in the Original problem section above). An empty array returns 0.
 
-`Less` 決定「遞增」的意義：用 `std::greater<>` 就變成追蹤嚴格遞減的區段。
+This exercise solves it for an array first, then for a stream that arrives one value at a time, and finishes with an alarm for rising streaks, which the original problem doesn't have.
 
-## Stage 3 — 實務延伸：連續上升告警
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`StreakAlarm<T, Less>`：
+## Stage 1 — The array version
 
-- `explicit StreakAlarm(std::size_t threshold)`：`threshold ≥ 1`，否則丟 `std::invalid_argument`。
-- `observe(value)`：回傳 `true` 代表**現在**應該告警，也就是目前的遞增區段**剛好**達到 `threshold` 這個長度。同一段區段繼續增長不會重複告警；區段斷掉之後的新區段可以再次告警。
+```cpp
+template <typename T>
+std::size_t count_longest_runs(std::span<const T> values);
+```
 
-O(1)、不配置記憶體。
+`count_longest_runs<T>(values)`: `values` is a `std::span<const T>`. Use a single pass, **O(n)**. Return 0 for an empty array.
 
-## 面試追問
+When two adjacent elements are equal, the increasing run breaks (the increase must be strict).
 
-1. 為什麼一次掃描就夠，不需要枚舉所有子陣列？寫出你的 loop invariant：跑完第 i 個元素時，你維護的三個變數各代表什麼？
-2. 如果「連續上升」改成「最近 k 筆都比各自前一筆大」的滑動視窗告警，你的狀態要怎麼改？
-3. 這題和「最長遞增**子序列**」（不需要連續）為什麼難度差這麼多？
+## Stage 2 — The streaming version
+
+```cpp
+template <typename T, typename Less = std::less<T>>
+class RunTracker {
+public:
+    void push(const T& value);
+
+    std::size_t longest() const;
+    std::size_t count() const;
+    std::size_t current() const;
+};
+```
+
+The data arrives one value at a time. `RunTracker<T, Less>` (the comparator defaults to `std::less<T>`):
+
+- `push(value)`: **O(1)**, and it must not use any extra heap memory (you can't store the data).
+- `longest()`: the length of the longest strictly increasing run so far, or 0 before any data has arrived.
+- `count()`: how many runs have a length equal to `longest()`, or 0 before any data has arrived.
+- `current()`: the length of the increasing run that ends at the latest value, or 0 before any data has arrived.
+
+`Less` defines what "increasing" means: with `std::greater<>`, the tracker follows strictly decreasing runs instead.
+
+## Stage 3 — Real-world extension: alerting on a rising streak
+
+```cpp
+template <typename T, typename Less = std::less<T>>
+class StreakAlarm {
+public:
+    explicit StreakAlarm(std::size_t threshold);
+
+    bool observe(const T& value);
+};
+```
+
+`StreakAlarm<T, Less>`:
+
+- `explicit StreakAlarm(std::size_t threshold)`: `threshold ≥ 1`; otherwise throw `std::invalid_argument`.
+- `observe(value)`: returning `true` means an alert should go out **now**, that is, the current increasing run has **just** reached length `threshold`. The same run growing further must not alert again; a new run that starts after the old one breaks can alert again.
+
+O(1), with no memory allocation.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is a single pass enough, with no need to enumerate every subarray? Write down your loop invariant: after processing element i, what does each of the three variables you maintain represent?
+2. If "rising steadily" became a sliding-window alert, "each of the last k values is larger than the one before it," how would your state have to change?
+3. Why is there such a gap in difficulty between this problem and "longest increasing **subsequence**" (where the elements need not be contiguous)?
+
+---
+
+**Official solution:** [Problem Set 0 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/cfc7d2d5bc3b9f4df35b5bdc7aa49284_MIT6_006S20_ps0-solutions.pdf). Read it after you finish.

@@ -1,45 +1,77 @@
 ---
-title: Binned Free Lists 與 Buddy Coalescing
-unit: 08 · Storage Allocation（HW6）
-source: 6.172 Lecture 11 Allocation for Binned Free Lists、Coalescing
+title: Binned Free Lists and Buddy Coalescing
+unit: 08 · Storage Allocation (HW6)
+source: 6.172 Lecture 11 Allocation for Binned Free Lists, Coalescing
 pdf: materials/6.172/lectures/lec11.pdf
 kind: code
 minutes: 90
 ---
 
-# 0803 · Binned Free Lists 與 Buddy Coalescing
+# 0803 · Binned Free Lists and Buddy Coalescing
 
-> **實務上為什麼會遇到**：Linux kernel 的 page allocator 就是這套 buddy 系統。問題的本質很典型：bin 用完時要把大塊切開（split），之後又要在不增加太多成本的情況下把相鄰的塊合併回來（coalesce），否則 external fragmentation 會把記憶體耗光。
+**Based on:** [Storage Allocation](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/68624442da6047731a33b3590cefd030_MIT6_172F18_lec11.pdf)
 
-一個只用位移（offset）的 allocator，不碰真實記憶體：整個 arena 有 2^`max_order` 個 unit。order k 的 block 長度是 2^k unit，起點一定是 2^k 的倍數。用 Lecture 11 的 binned 配置法實作：
+> **Why this comes up in practice:** the Linux kernel's page allocator is exactly this buddy system. The core problem is a classic one: when a bin runs out, you must split a larger block, and later you must merge adjacent blocks back together (coalesce) without adding much cost, or external fragmentation will eat up all the memory.
 
-## Stage 1 — 配置與切分
+## Your task
 
-`allocate(units)`：先算出放得下 `units` 的最小 order k。
+Build an allocator that works only with offsets and never touches real memory: the whole arena has 2^`max_order` units. A block of order k is 2^k units long, and its start is always a multiple of 2^k. Implement it with Lecture 11's binned allocation scheme.
 
-- bin k 有 free block 就直接用。
-- 沒有的話，找最小的非空 bin k′ > k，把那塊一路切半：每切一次，把**高位那半**放進較小的 bin，繼續切**低位那半**，直到 order k，把低位的 k 階 block 回傳。
-- arena 裡沒有夠大的 block 時回傳 `std::nullopt`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`units == 0` 丟 `std::invalid_argument`。`free_blocks(order)` 回傳該 bin 的 block 數；`free_units()` 回傳目前閒置的 unit 總數。
+## Stage 1 — Allocating and splitting
 
-每個 bin 要用能 O(log n) 插入、刪除指定 offset 的結構。
+```cpp
+class BuddyAllocator {
+public:
+    explicit BuddyAllocator(int max_order);
 
-## Stage 2 — 釋放與合併
+    std::optional<std::size_t> allocate(std::size_t units);
+    std::size_t free_blocks(int order) const;
+    std::size_t free_units() const;
+};
+```
 
-`free(offset)`：`offset` 是 `allocate` 回傳過、尚未釋放的值。釋放時如果它的 **buddy**（同 order、相鄰且一起才能湊成更大 block 的那一塊）也是閒置的，兩塊就立刻合併，並繼續往上檢查，直到不能再合併。
+`allocate(units)`: first find the smallest order k that can hold `units`.
 
-合併要是 O(log n)，不可以線性掃描。全部釋放之後，不管順序如何，arena 必須回到一個完整的 max-order block。
+- If bin k has a free block, use it directly.
+- Otherwise, find the smallest nonempty bin k′ > k and keep halving its block: after each split, put the **upper half** into the next smaller bin and keep splitting the **lower half** until you reach order k, then return that lower block of order k.
+- Return `std::nullopt` when the arena has no block large enough.
 
-## Stage 3 — 碎片指標
+`units == 0` throws `std::invalid_argument`. `free_blocks(order)` returns the number of blocks in that bin, and `free_units()` returns the total number of units currently free.
 
-- `largest_free_block()`：目前最大閒置 block 的 unit 數（沒有閒置就回傳 0）。
-- `external_fragmentation()`：`1 - largest / free_units`，全部配置時定義為 0。
+Each bin must use a structure that can insert and remove a given offset in O(log n).
 
-這一關的測試會構造幾種配置模式，確認指標算得對。想想棋盤格的情況為什麼 buddy 系統也幫不上忙。
+## Stage 2 — Freeing and coalescing
 
-## 面試追問
+```cpp
+// in class BuddyAllocator
+void free(std::size_t offset);
+```
 
-1. 為什麼 buddy 的 offset 可以用一行位元運算算出來？這跟「block 起點必須是自己長度的倍數」有什麼關係？
-2. Lecture 11 的分析：binned free list 的外部碎片上界是多少倍的最大使用量？為什麼 coalescing 實務上很有用，但沒有改變最壞情況的上界？
-3. Linux 的 buddy allocator 上面還疊了 slab。這兩層各解決什麼問題？
+`free(offset)`: `offset` is a value that `allocate` returned and that has not been freed yet. When it is freed, if its **buddy** (the block of the same order next to it that, together with it, forms a larger block) is also free, merge the two immediately and keep checking upward until no more merging is possible.
+
+Coalescing must be O(log n); no linear scans. Once everything has been freed, in any order, the arena must be back to a single whole max-order block.
+
+A `PERF` test runs 1.2 million random allocations and frees on an arena of 2^40 units, where a linear scan of the arena or of the free blocks would take minutes.
+
+## Stage 3 — Fragmentation metrics
+
+```cpp
+// in class BuddyAllocator
+std::size_t largest_free_block() const;
+double external_fragmentation() const;
+```
+
+- `largest_free_block()`: the size in units of the largest free block right now (return 0 if nothing is free).
+- `external_fragmentation()`: `1 - largest / free_units`, defined as 0 when everything is allocated.
+
+This stage's tests build several allocation patterns and check that the metrics are computed correctly. Think about why the buddy system can't help with a checkerboard pattern either.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why can a buddy's offset be computed with a single bit operation? How does that relate to "a block's start must be a multiple of its own length"?
+2. From Lecture 11's analysis: the external fragmentation of binned free lists is bounded by what multiple of the maximum memory in use? Why is coalescing useful in practice even though it doesn't change the worst-case bound?
+3. Linux stacks a slab layer on top of its buddy allocator. What problem does each layer solve?

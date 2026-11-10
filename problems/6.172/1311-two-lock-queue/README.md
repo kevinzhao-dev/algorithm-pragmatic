@@ -1,7 +1,7 @@
 ---
-title: 雙鎖 FIFO Queue（head 鎖與 tail 鎖）
-unit: 13 · Data Synchronization（HW10）
-source: 6.172 HW10 check-off 1、2、7（two-lock queue）
+title: Two-Lock FIFO Queue (a head lock and a tail lock)
+unit: 13 · Data Synchronization (HW10)
+source: 6.172 HW10 check-off 1, 2, 7 (two-lock queue)
 pdf: materials/6.172/homework/hw10/handout.pdf
 read: materials/6.172/lectures/lec17.pdf
 kind: code
@@ -9,37 +9,82 @@ minutes: 80
 sanitizer: tsan
 ---
 
-# 1311 · 雙鎖 FIFO Queue
+# 1311 · Two-Lock FIFO Queue
 
-> **實務上為什麼會遇到**：工作佇列的 producer 和 consumer 通常在不同的 thread 上，一把鎖會讓它們互相等待。把鎖拆成 head 和 tail 之後，兩端可以同時動作，這幾乎是所有 bounded queue 的起點。
+**Original problem:** [HW10: Data Synchronization](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/64f4db5020ca72ab205e458d40bbdfe3_MIT6_172F18hw10.pdf) · **Read first:** [Synchronization Without Locks](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/fc3b846f6e13e15e4982a92369ca3825_MIT6_172F18_lec17.pdf)
 
-Michael & Scott 的雙鎖 queue：用 dummy node 讓 head 和 tail 永遠指向不同（或同一個空）節點，`enqueue` 只碰 tail，`dequeue` 只碰 head。
+> **Why this comes up in practice:** a work queue's producers and consumers usually run on different threads, and a single lock makes them wait for each other. Split the lock into a head lock and a tail lock, and both ends can work at the same time; this is the starting point of almost every bounded queue.
 
-節點由 `_shared/08_node_pool.hpp` 的 `practice::NodePool` 提供，初始化時預先配置（作業的 `new_node` / `free_node`）。模板參數 `Mutex`（預設 `std::mutex`）、`Atomic`（預設 `std::atomic`）用來換掉同步機制：測試會換成 `dsched::Mutex` / `dsched::Atomic` 窮舉 interleaving，也用真的鎖跑 TSan。
+## Original problem
 
-## Stage 1 — 序列語意（check-off 1）
+6.172 HW10 (Data Synchronization) is a written homework that compares two FIFO queues given as C-like pseudocode: a lock-based queue (Figure 1) and a lock-free queue (Figures 2 and 3, restated in 1312). Both take their nodes from a pool allocated in advance, where `new_node()` grabs a free node and `free_node(node)` returns one, and both start with a dummy node that is never dequeued and only marks the queue as empty. In the lock-based queue, a node holds a value and a next pointer, and the queue holds a head pointer and a tail pointer, each with its own lock:
 
-`TwoLockQueue<T, Mutex, Atomic>(capacity)`：最多同時放 `capacity` 個元素（pool 要多一個節點給 dummy）。
+- Enqueue fills in a new node whose next is null, then, holding the tail lock, links it after the current tail and moves tail to it.
+- Dequeue, holding the head lock, looks at the node after head. If there is none, the queue is empty and dequeue fails; otherwise it copies out that node's value, moves head to it, releases the lock, and frees the old dummy.
 
-- `enqueue(value)`：回傳是否成功，節點用完時回傳 `false`。
-- `dequeue()`：回傳 `std::optional<T>`，空的回傳 `std::nullopt`。
+The handout asks you to assume that the compiler doesn't reorder instructions, that the pool never runs out, and that nodes don't cross cache lines, so every write is atomic. Three check-off questions concern this queue:
 
-`T` 可能是 move-only（例如 `std::unique_ptr`），不可以要求可複製。
+- Check-off 1: what constraints must enqueue and dequeue satisfy in a FIFO queue? (This one doesn't need the code.)
+- Check-off 2: what do two locks gain over a single lock?
+- Check-off 7: simplify the lock-based code for the case where only one thread may enqueue. Write the pseudocode with comments, and argue why every possible execution still keeps FIFO order.
 
-## Stage 2 — 兩把鎖（check-off 2）
+## Your task
 
-`enqueue` 只拿 tail 鎖，`dequeue` 只拿 head 鎖，兩邊可以同時在各自的臨界區內。
+Michael & Scott's two-lock queue: a dummy node keeps head and tail pointing at different nodes (or at the same node when the queue is empty), `enqueue` touches only tail, and `dequeue` touches only head.
 
-**注意**：queue 空的時候，tail 指到的節點和 head 指到的節點是同一個，enqueuer 寫它的 `next`，dequeuer 讀它的 `next`，這是真正的競爭，所以 `next` 必須是 `Atomic`。作業的 pseudocode 把它當普通指標，是因為那裡假設寫入是 atomic 的；在 C++ 裡一定要明講。
+The nodes come from `practice::NodePool` in `_shared/08_node_pool.hpp` and are preallocated at initialization (the homework's `new_node` / `free_node`). The template parameters `Mutex` (default `std::mutex`) and `Atomic` (default `std::atomic`) let the tests replace the synchronization: they swap in `dsched::Mutex` / `dsched::Atomic` to enumerate interleavings, and also run TSan with real locks.
 
-FIFO 的約束（check-off 1）：同一個 producer 依序 enqueue 的值，dequeue 的順序也要一樣；每個值恰好被取出一次。
+Instead of answering on paper, you implement the homework's lock-based queue in C++, and then the single-enqueuer simplification from check-off 7.
 
-## Stage 3 — 只有一個 enqueuer（check-off 7）
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`SingleEnqueuerQueue<T, Mutex, Atomic>(capacity)`：保證只有一個 thread 會呼叫 `enqueue`，所以可以把 tail 鎖拿掉，`enqueue` 完全不拿鎖。`dequeue` 不變（仍可能有多個 consumer）。
+## Stage 1 — Sequential semantics (check-off 1)
 
-## 面試追問
+```cpp
+template <typename T, typename Mutex = std::mutex, template <typename> class Atomic = std::atomic>
+class TwoLockQueue {
+public:
+    explicit TwoLockQueue(std::size_t capacity);
 
-1. 為什麼需要 dummy node？拿掉 dummy，空 queue 的情況會怎麼出問題？（作業 check-off 3 前的 Figure 1）
-2. check-off 2：雙鎖版本的 throughput 上限在哪？什麼 workload 下跟一把鎖差不多？
-3. Stage 3 裡 enqueuer 為什麼可以完全不拿鎖？如果也只有一個 consumer，`dequeue` 的 head 鎖還需要嗎？
+    bool enqueue(T value);
+    std::optional<T> dequeue();
+};
+```
+
+`TwoLockQueue<T, Mutex, Atomic>(capacity)`: holds at most `capacity` elements at once (the pool needs one extra node for the dummy).
+
+- `enqueue(value)`: return whether it succeeded; return `false` when the nodes run out.
+- `dequeue()`: return a `std::optional<T>`, or `std::nullopt` when the queue is empty.
+
+`T` may be move-only (for example `std::unique_ptr`); you must not require it to be copyable.
+
+## Stage 2 — Two locks (check-off 2)
+
+`enqueue` takes only the tail lock and `dequeue` takes only the head lock, so both sides can be inside their own critical sections at the same time.
+
+**Note:** when the queue is empty, tail and head point to the same node; the enqueuer writes that node's `next` while the dequeuer reads its `next`. That is a real race, so `next` must be an `Atomic`. The homework's pseudocode treats it as a plain pointer because it assumes there that writes are atomic; in C++ you must say so explicitly.
+
+The FIFO constraint (check-off 1): values that one producer enqueues in order must be dequeued in the same order, and every value is taken out exactly once.
+
+## Stage 3 — Only one enqueuer (check-off 7)
+
+```cpp
+template <typename T, typename Mutex = std::mutex, template <typename> class Atomic = std::atomic>
+class SingleEnqueuerQueue {
+public:
+    explicit SingleEnqueuerQueue(std::size_t capacity);
+
+    bool enqueue(T value);
+    std::optional<T> dequeue();
+};
+```
+
+`SingleEnqueuerQueue<T, Mutex, Atomic>(capacity)`: only one thread is guaranteed to call `enqueue`, so you can drop the tail lock, and `enqueue` takes no lock at all. `dequeue` stays the same (there may still be several consumers).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is a dummy node needed? Without the dummy, what goes wrong when the queue is empty? (The homework's Figure 1, before check-off 3)
+2. Check-off 2: where is the throughput ceiling of the two-lock version? Under what workload is it about the same as a single lock?
+3. In Stage 3, why can the enqueuer take no lock at all? If there is also only one consumer, does `dequeue` still need the head lock?

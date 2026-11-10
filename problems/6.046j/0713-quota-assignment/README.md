@@ -1,6 +1,6 @@
 ---
-title: 配額分派（最少退單與增量重排）
-unit: 07 · Network Flow（PS7）
+title: Quota Assignment (fewest rejections and incremental reassignment)
+unit: 07 · Network Flow (PS7)
 source: 6.046J PS7 Problem 7-3
 pdf: materials/6.046j/psets/ps07/questions.pdf
 answer: materials/6.046j/psets/ps07/solutions.pdf
@@ -9,53 +9,81 @@ kind: code
 minutes: 110
 ---
 
-# 0713 · 配額分派
+# 0713 · Quota Assignment
 
-> **實務上為什麼會遇到**：GPU 型號配額分給訓練任務、廣告庫存分給投放需求、機位分給旅客。每個 request 能接受若干種資源，每種資源有配額，目標是拒絕最少的 request。這題同時做離線批次與增量重排。
+**Original problem:** [Problem Set 7](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/93951baaee86c66b1f2fd48e2c493745_MIT6_046JS15_pset7.pdf) · **Read first:** [Incremental Improvement: Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bdafe05f4f3c20cabfd08d2fbd099f63_MIT6_046JS15_lec14A.pdf)
 
-`accepts[i]` 是 request i 可接受的資源種類（`0..m-1`，可能為空），`quota[j]` 是資源 j 的數量。一個 request 至多拿一份資源。
+> **Why this comes up in practice:** handing out GPU-model quotas to training jobs, ad inventory to campaigns, and seats to passengers. Each request accepts several kinds of resources, each resource has a quota, and the goal is to reject as few requests as possible. This exercise covers both the offline batch version and incremental reassignment.
 
-一次只看一關。
+## Original problem
 
-## Stage 1 — 離線最佳分派
+6.046J PS7 Problem 7-3 ("Food Truck Orders") is about a food truck that makes m kinds of lunch items b1, …, bm, with exactly qj portions of item bj. Before lunch, n customers a1, …, an each text in a set Ai of one or more items they would accept. Every customer must be given either one of their acceptable items or a $10 voucher, and the truck wants to give out as few vouchers as possible. Give an efficient algorithm for this assignment; the hint is to model it as a max-flow problem.
+
+## Your task
+
+`accepts[i]` lists the resource types that request i accepts (`0..m-1`, possibly empty), and `quota[j]` is the number of units of resource j. A request gets at most one unit.
+
+Stage 1 solves the original problem, with requests in place of customers, resources in place of menu items, and rejections in place of vouchers. Stages 2 and 3 add an explanation of shortages and an allocator that reassigns incrementally.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — The best offline assignment
 
 ```cpp
 struct Plan {
-    std::vector<int> choice;   // choice[i] = 分到的資源，或 -1
-    int rejected = 0;          // 沒拿到的 request 數，必須最小
+    std::vector<int> choice;   // choice[i] = the assigned resource, or -1
+    int rejected = 0;          // the number of requests that got nothing; must be minimal
 };
 Plan best_plan(std::span<const std::vector<int>> accepts, std::span<const int> quota);
 ```
 
-每個 request 只能拿自己接受的資源、每種資源分出去的份數不超過 `quota[j]`。O(E·f) 即可。
+Each request may only get a resource it accepts, and no resource hands out more than `quota[j]` units. O(E·f) is enough.
 
-## Stage 2 — 短缺說明
+## Stage 2 — Explaining a shortage
 
-當一定有人被拒絕時，營運想知道為什麼。
+```cpp
+struct Shortage {
+    std::vector<int> requests;
+    std::vector<int> resources;
+};
+Shortage shortage_report(std::span<const std::vector<int>> accepts,
+                         std::span<const int> quota);
+```
 
-`Shortage shortage_report(accepts, quota)`，`Shortage{requests, resources}`：
-- 回傳一組 request 子集 `requests`（升冪）、資源子集 `resources`（升冪），滿足：`requests` 中每個 request 接受的資源都在 `resources` 內，且 `Σ quota(resources) < requests.size()`。
-- `best_plan` 的 `rejected == 0` 時回傳兩個空 vector。
+When someone has to be rejected, operations wants to know why.
 
-## Stage 3 — 實務延伸：增量配置器
+`Shortage shortage_report(accepts, quota)`, with `Shortage{requests, resources}`:
+- Return a subset of the requests, `requests` (in increasing order), and a subset of the resources, `resources` (in increasing order), such that every resource accepted by a request in `requests` is in `resources`, and `Σ quota(resources) < requests.size()`.
+- When `best_plan` gives `rejected == 0`, return two empty vectors.
+- The tests pin down which subsets: in an optimal plan, `requests` is every request reachable from a rejected request by alternating steps (a request → a resource it accepts → a request holding that resource → …), and `resources` is exactly the resources reached that way. For `accepts {{0},{0},{1}}` and `quota {1,1}`, that is requests `{0, 1}` and resources `{0}`.
+
+## Stage 3 — Real-world extension: an incremental allocator
 
 ```cpp
 class Allocator {
 public:
     explicit Allocator(std::vector<int> quota);
-    // 加入一個 request，回傳 request id（從 0 遞增）。內部要重排別人的分派，
-    // 讓目前的 request 全體仍然拒絕最少。每次 O(E)。
+    // Adds a request and returns its request id (increasing from 0). Internally it reassigns other requests
+    // so that the current set of requests still has the fewest rejections. O(E) per call.
     int add_request(std::vector<int> accepts);
-    void cancel(int id);                 // 取消 request（已取消的 id 不再有效）
-    int choice_of(int id) const;         // 目前分到的資源，或 -1
-    int rejected() const;                // 目前未取消的 request 中被拒絕的數量
+    void cancel(int id);                 // cancels a request (a canceled id is no longer valid)
+    int choice_of(int id) const;         // the currently assigned resource, or -1
+    int rejected() const;                // how many of the requests not canceled are rejected
 };
 ```
 
-`cancel` 釋放的資源要立刻讓被拒絕的 request 有機會補上；操作後仍要是最佳分派。
+A resource freed by `cancel` must immediately give rejected requests a chance to take it; after every operation, the assignment must still be optimal. `add_request` never turns a served request into a rejected one (it may move it to another resource): if the newcomer can't be served that way, the newcomer is the one rejected.
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼這個問題等於 bipartite matching，而不必真的把資源複製成 quota 個節點？
-2. Stage 3 新增 request 時，為什麼只需要一條 augmenting path？取消 request 時又為什麼只需要一條？
-3. 如果 request 有優先序（寧可拒絕低優先的），演算法還成立嗎？（min-cost flow / matroid）
+Once you're done, answer without looking at your code:
+
+1. Why is this problem the same as bipartite matching, and why don't you actually need to copy each resource into quota separate nodes?
+2. In Stage 3, why does adding a request need only one augmenting path? And why does canceling a request need only one?
+3. If requests had priorities (you would rather reject low-priority ones), would the algorithm still work? (min-cost flow / matroid)
+
+---
+
+**Official solution:** [Solutions to Problem Set 7](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/a320dad5988c30172a2b1538536dc0a2_MIT6_046JS15_pset7sols.pdf). Read it after you finish.

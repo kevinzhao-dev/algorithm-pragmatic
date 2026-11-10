@@ -1,6 +1,6 @@
 ---
-title: 動態 Max Flow（容量更新不重算）
-unit: 07 · Network Flow（PS7）
+title: Dynamic Max Flow (capacity updates without recomputing)
+unit: 07 · Network Flow (PS7)
 source: 6.046J PS7 Problem 7-1
 pdf: materials/6.046j/psets/ps07/questions.pdf
 answer: materials/6.046j/psets/ps07/solutions.pdf
@@ -9,47 +9,69 @@ kind: code
 minutes: 150
 ---
 
-# 0711 · 動態 Max Flow
+# 0711 · Dynamic Max Flow
 
-> **實務上為什麼會遇到**：SDN 控制器的 bandwidth allocation，link 容量隨時被調整（維護、故障、QoS 重分配）；每次重算全網 max flow 代價太大。這題要做到：容量只差 k，工作量也只有 O(k(V+E))。
+**Original problem:** [Problem Set 7](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/93951baaee86c66b1f2fd48e2c493745_MIT6_046JS15_pset7.pdf) · **Read first:** [Incremental Improvement: Max Flow, Min Cut](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ac6b6e8ac932bb5dfb6506fd0db9d5ad_MIT6_046JS15_lec13.pdf), [Incremental Improvement: Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bdafe05f4f3c20cabfd08d2fbd099f63_MIT6_046JS15_lec14A.pdf)
 
-頂點 `0..n-1`，source、sink 在建構時給定，容量是非負整數。允許平行邊與反向邊，`u == v` 不會出現。
+> **Why this comes up in practice:** an SDN controller allocates bandwidth while link capacities keep changing (maintenance, failures, QoS reallocation), and recomputing the max flow of the whole network every time costs too much. This exercise gets the work down to O(k(V+E)) when a capacity changes by only k.
+
+## Original problem
+
+6.046J PS7 Problem 7-1 asks for an algorithm that repairs a maximum flow after one capacity changes. Its input is a flow network F = (G, c), where G = (V, E) has a source s and a target t and c gives every directed edge a nonnegative integer capacity; a maximum flow f for F; and a triple (u, v, r), where u and v are vertices of G and r is a nonnegative integer with r ≠ c(u, v). It must output a maximum flow for F′ = (G, c′), where c′ agrees with c except that c′(u, v) = r. With k = |c(u, v) − r|, the algorithm must run in O(k·(V + E)) time, and it treats r > c(u, v) and r < c(u, v) differently.
+
+- (a) First prove four general facts about flow networks. Raising one edge's capacity by 1 raises the max flow by at most 1, and raising it by a positive integer k raises the max flow by at most k. Likewise, lowering one edge's capacity by 1 lowers the max flow by at most 1, and lowering it by k lowers the max flow by at most k.
+- (b) For r > c(u, v), give the algorithm, prove it correct, and analyze its running time in terms of V, E and k.
+- (c) For r < c(u, v), do the same: give the algorithm, prove it correct, and analyze its running time.
+
+## Your task
+
+Vertices are `0..n-1`, the source and sink are given to the constructor, and capacities are nonnegative integers. Parallel and reverse edges are allowed; `u == v` never appears.
 
 ```cpp
 class DynamicMaxFlow {
 public:
     DynamicMaxFlow(int n, int source, int sink);
-    int add_edge(int u, int v, long long capacity);   // edge id 從 0 遞增
-    long long compute();                              // 計算最大流，回傳 flow 值
-    long long value() const;                          // 目前 flow 值
+    int add_edge(int u, int v, long long capacity);   // edge ids increase from 0
+    long long compute();                              // computes a max flow and returns its value
+    long long value() const;                          // the current flow value
     long long flow_on(int id) const;
     long long capacity_of(int id) const;
-    long long set_capacity(int id, long long r);      // 見下，回傳新的 flow 值
+    long long set_capacity(int id, long long r);      // see below; returns the new flow value
 };
 ```
 
-`add_edge` 都在第一次 `compute` 之前；之後只能 `set_capacity`。
+Every `add_edge` call comes before the first `compute`; after that, only `set_capacity` may change the network. `capacity_of(id)` returns the edge's current capacity (`r` after `set_capacity(id, r)`). `set_capacity` may also be called with `r` equal to the current capacity; then nothing changes, and it returns the current flow value.
 
-一次只看一關。
+Stage 1 builds the network and an initial max flow, and Stages 2–4 implement parts (b) and (c) inside `set_capacity`. Part (a) is not coded; it comes back as an interview follow-up.
 
-## Stage 1 — 建圖與初始 max flow
+Write your code in `solution.hpp`. Rather than each stage listing the declarations it adds, the block above shows the whole interface, copied from that file.
 
-`compute()` 用 0701 的成果（或重寫）建好 residual graph 並算出一個 max flow。`flow_on` 必須滿足 capacity 和 conservation。
+Read one stage at a time.
 
-## Stage 2 — 容量增加（Part b）
+## Stage 1 — Building the network and the initial max flow
 
-`set_capacity(id, r)`，`r > c`：回傳新的 max flow。令 `k = r - c`，時間 O(k(V+E))。**不可以**整個重算。
+`compute()` builds the residual graph and computes a max flow, reusing your work from 0701 (or rewriting it). `flow_on` must satisfy the capacity constraints and conservation.
 
-## Stage 3 — 容量減少但流量還放得下（Part c，簡單情況）
+## Stage 2 — Increasing a capacity (Part b)
 
-`r < c` 而目前 `flow_on(id) ≤ r`：max flow 不會變大，也不需要動到任何流量（為什麼？）。
+`set_capacity(id, r)` with `r > c`: return the new max flow. With `k = r - c`, it must take O(k(V+E)) time. You **must not** recompute from scratch.
 
-## Stage 4 — 容量減少而流量放不下（Part c，主要情況）
+## Stage 3 — Decreasing a capacity when the flow still fits (Part c, the easy case)
 
-`r < c` 且 `flow_on(id) > r`：先把這條邊多出來的流量退掉（要恢復 conservation），再試著補回去。令 `k = c - r`，時間 O(k(V+E))。完成後 `flow_on(id) ≤ r` 且仍為 max flow。
+`r < c` and the current `flow_on(id) ≤ r`: the max flow can't increase, and no flow needs to change (why?).
 
-## 面試追問
+## Stage 4 — Decreasing a capacity when the flow no longer fits (Part c, the main case)
 
-1. 為什麼容量改變 k 時 max flow 至多改變 k？用 min cut 講清楚（Part a）。這跟 O(k(V+E)) 的 k 次 augment 有什麼關係？
-2. 退流量時，沿著帶正流量的邊往回走，為什麼一定走得到 s、t 或 v？（conservation invariant；若 flow 圖有環？）
-3. 如果容量不是整數，這個 O(k(V+E)) 的論證還成立嗎？怎麼修？
+`r < c` and `flow_on(id) > r`: first cancel the excess flow on this edge (restoring conservation), then try to make it up along other paths. With `k = c - r`, it must take O(k(V+E)) time. Afterwards `flow_on(id) ≤ r` and the flow is still a max flow.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does the max flow change by at most k when a capacity changes by k? Explain it with min cuts (Part a). How does that relate to the k augmentations behind O(k(V+E))?
+2. When you cancel flow by walking backward along edges that carry positive flow, why are you guaranteed to reach s, t, or v? (The conservation invariant; what if the flow contains a cycle?)
+3. If capacities weren't integers, would the O(k(V+E)) argument still hold? How would you fix it?
+
+---
+
+**Official solution:** [Solutions to Problem Set 7](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/a320dad5988c30172a2b1538536dc0a2_MIT6_046JS15_pset7sols.pdf). Read it after you finish.

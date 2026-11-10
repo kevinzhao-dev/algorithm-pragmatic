@@ -1,6 +1,6 @@
 ---
-title: 矩形矩陣乘法的快取分析
-unit: 11 · Caching（HW8）
+title: Cache Analysis of Rectangular Matrix Multiplication
+unit: 11 · Caching (HW8)
 source: 6.172 HW8 §1 Checkoff 1
 pdf: materials/6.172/homework/hw08/handout.pdf
 read: materials/6.172/lectures/lec14.pdf
@@ -8,43 +8,81 @@ kind: code
 minutes: 70
 ---
 
-# 1111 · 矩形矩陣乘法的快取分析
+# 1111 · Cache Analysis of Rectangular Matrix Multiplication
 
-> **實務上為什麼會遇到**：真實資料很少是正方形，tall-and-skinny 的矩陣（例如 PCA 的資料矩陣）極常見。不同維度比例會落在不同的快取區間，分析要逐一討論，這題把那些漸近分析變成跑得起來、對得到的東西。
+**Original problem:** [HW8: Caching and Cachegrind](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/5bc7ce0d33656fd3783abcdc3dc4eb92_MIT6_172F18hw8.pdf) · **Read first:** [Caching and Cache-Efficient Algorithms](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/329bfc6e1808c375afa517feb3c4c273_MIT6_172F18_lec14.pdf)
 
-A 是 m×n、B 是 n×r、C 是 m×r，都用 row-major。延續 1102 的矩陣介面（`rows/cols/get/set`），結果累加到 `c`。
+> **Why this comes up in practice:** real data is rarely square; tall-and-skinny matrices (such as the data matrix in PCA) are extremely common. Different aspect ratios land in different cache regimes, and the analysis has to treat each one separately; this exercise turns those asymptotic analyses into something you can run and check.
 
-作業要你分析這幾個情況（M = 快取容量、B = line 大小，兩者都以「元素」為單位）：
+## Original problem
 
-- naive 三層迴圈（`i`, `j`, `k` 分別跑 m、r、n）在 `n > M/B` 的時候。
-- 同樣的 naive 在 `M/r < n < M/B` 的時候。
-- cache-oblivious 遞迴。
+6.172 HW8 §1 recalls Lecture 14's cache analysis of n × n matrix multiplication with row-major matrices, on a tall cache of size M with lines of size B. The naive triple loop incurs Θ(n³) misses when n > M/B and Θ(n³/B) when M^{1/2} < n < M/B; blocking with a block size s < M^{1/2} incurs Θ(n³/(B·M^{1/2})); and the cache-oblivious recursion matches blocking without needing the "voodoo" parameter s.
+
+- Checkoff 1: for the product of an m × n matrix and an n × r matrix, under the same tall-cache assumption, analyze the cache complexity in one case of your choice: the naive approach with n > M/B, the naive approach with M/r < n < M/B, the blocked approach, or the cache-oblivious approach.
+
+## Your task
+
+A is m×n, B is n×r, and C is m×r, all row-major. Keep 1102's matrix interface (`rows/cols/get/set`), and accumulate the result into `c`.
+
+The homework asks you to analyze these cases (M = cache capacity, B = line size, both measured in "elements"):
+
+- The naive triple loop (`i`, `j`, `k` running over m, r, and n respectively) when `n > M/B`.
+- The same naive loop when `M/r < n < M/B`.
+- The cache-oblivious recursion.
+
+Rather than analyzing one case on paper, you implement the naive and recursive products and encode your analysis as predictions that the tests compare with simulated miss counts.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Naive
 
-`multiply_rect_naive(a, b, c)`：`for i in m, for j in r, for k in n`：`c(i, j) += a(i, k) * b(k, j)`。
+```cpp
+// A is m×n, B is n×r, C is m×r (row-major); the result accumulates into C.
+template <typename A, typename B, typename C>
+void multiply_rect_naive(const A& a, const B& b, C& c);
+```
 
-## Stage 2 — 遞迴
+`multiply_rect_naive(a, b, c)`: `for i in m, for j in r, for k in n`: `c(i, j) += a(i, k) * b(k, j)`.
 
-`multiply_rect_recursive(a, b, c)`：把 m、n、r 三維中最大的那一維切半（平手時優先切 m，再來 n），分成兩個子問題遞迴，直到三維都是 1。子問題的切法：
+## Stage 2 — Recursion
 
-- 切 m：A 和 C 依 row 切開，上下兩個子問題。
-- 切 n：A 依 column、B 依 row 切開。
-- 切 r：B 和 C 依 column 切開。
+```cpp
+template <typename A, typename B, typename C>
+void multiply_rect_recursive(const A& a, const B& b, C& c);
+```
 
-## Stage 3 — 分析（Checkoff）
+`multiply_rect_recursive(a, b, c)`: halve the largest of the three dimensions m, n, and r (on a tie, prefer m, then n), recurse on the two subproblems, and stop when all three dimensions are 1. How the subproblems are cut:
 
-把你的分析寫成兩個函式，測試會拿模擬器（M = 512 elements，B = 8 elements）的實際 miss 數比對：
+- Cutting m: split A and C by rows into a top and a bottom subproblem.
+- Cutting n: split A by columns and B by rows.
+- Cutting r: split B and C by columns.
 
-- `predict_naive_misses(m, n, r, cache)`：回傳 naive 在上述兩個情況的 Θ 估計（不用管常數，但要大致相近）。
-- `predict_recursive_misses(m, n, r, cache)`：回傳遞迴版本的 Θ 估計，提示：`Θ(mnr/(B√M) + (mn+nr+mr)/B + m+n+r)`。
+## Stage 3 — Analysis (Checkoff)
 
-`CacheGeometry` 給你 `capacity_elements`（M）、`line_elements`（B）與 `lines()`（M/B）。
+```cpp
+struct CacheGeometry {
+    double capacity_elements;  // M
+    double line_elements;      // B
+    double lines() const;      // provided: M/B
+};
 
-naive 的預測與實際要在 2 倍之內，遞迴要在 4 倍之內。為了排除 conflict miss（Lecture 14 講過，row-major 對 2 的次方的維度特別傷），這題的模擬器用 fully associative。
+inline double predict_naive_misses(double m, double n, double r, const CacheGeometry& cache);
+inline double predict_recursive_misses(double m, double n, double r, const CacheGeometry& cache);
+```
 
-## 面試追問
+Write your analysis as two functions; the tests compare them with the actual miss counts from the simulator (M = 512 elements, B = 8 elements):
 
-1. 在 `n > M/B` 的情況下，為什麼 naive 每次存取 B 都會 miss？跟 r 的大小有關嗎？
-2. tiling 的版本只能依 m、n、r 的某個固定比例調參，遞迴版本為什麼不用知道這些比例？
-3. tall cache 假設（`B² ≤ cM`）在這題的分析裡用在哪裡？少了它什麼會壞掉？
+- `predict_naive_misses(m, n, r, cache)`: return the Θ estimate for the naive loop in the two cases above (ignore constants, but it must be roughly close).
+- `predict_recursive_misses(m, n, r, cache)`: return the Θ estimate for the recursive version. Hint: `Θ(mnr/(B√M) + (mn+nr+mr)/B + m+n+r)`.
+
+`CacheGeometry` gives you `capacity_elements` (M), `line_elements` (B), and `lines()` (M/B).
+
+The naive predictions must be within a factor of 2 of the actual counts, and the recursive ones within a factor of 4. To rule out conflict misses (Lecture 14 covered how row-major layout is especially hurt by power-of-2 dimensions), this exercise's simulator is fully associative. The tests also check that the recursion beats the naive loop by more than 10 times on a 32 × 512 × 32 product, where a column of B doesn't fit in the cache, and by more than 2 times on a 128 × 32 × 64 product.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. When `n > M/B`, why does the naive loop miss on every access to B? Does it depend on the size of r?
+2. A tiled version can only be tuned for one fixed ratio of m, n, and r. Why doesn't the recursive version need to know these ratios?
+3. Where does the tall-cache assumption (`B² ≤ cM`) come into this exercise's analysis? What breaks without it?

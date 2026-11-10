@@ -1,7 +1,7 @@
 ---
-title: Set-Associative LRU 快取模擬器
-unit: 11 · Caching（HW8）
-source: 6.172 Lecture 14（快取結構、3C miss）；Recitation 8 第 1–2 題
+title: Set-Associative LRU Cache Simulator
+unit: 11 · Caching (HW8)
+source: 6.172 Lecture 14 (cache structure, 3C misses); Recitation 8 Problems 1–2
 pdf: materials/6.172/lectures/lec14.pdf
 answer: materials/6.172/recitations/r8/solutions.pdf
 read: materials/6.172/recitations/r8/problems.pdf
@@ -9,50 +9,103 @@ kind: code
 minutes: 120
 ---
 
-# 1101 · Set-Associative LRU 快取模擬器
+# 1101 · Set-Associative LRU Cache Simulator
 
-> **實務上為什麼會遇到**：cachegrind 在這台機器上沒有，但快取行為是可以模擬的。自己寫一個確定性的快取模型，就能問「這個資料結構換一種 layout 到底差多少 miss」，而且結果可重現。false sharing 的直覺也是從這裡建立的。
+**Based on:** [Caching and Cache-Efficient Algorithms](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/329bfc6e1808c375afa517feb3c4c273_MIT6_172F18_lec14.pdf) · **Read first:** [R8: Caching and Cachegrind Problems](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/ea9f0adaa90fd8c13b3cfcd90c419e5d_MIT6_172F18_rec8.pdf)
 
-這題的模擬器接下來的題目也會用到（它們用 `_shared/08_cache_sim.hpp`，介面相同）。先自己寫一次，之後才知道 miss 數字代表什麼。多層快取與 miss-ratio curve 在 1103。
+> **Why this comes up in practice:** cachegrind isn't available on this machine, but cache behavior can be simulated. Write your own deterministic cache model, and you can ask "how many misses does a different layout of this data structure really save", with reproducible results. It's also where your intuition for false sharing gets built.
 
-> ⚠️ **爆雷警告**：`_shared/08_cache_sim.hpp` 是完整的模擬器，等於這題和 1103 大部分的解答，做完之前不要打開。
+## Original problem
+
+6.172 Recitation 8 Problems 1 and 2 are multiple-choice questions about caches:
+
+- Problem 1: what advantages does a set-associative cache have over a direct-mapped cache with the same total capacity? The choices: (A) fewer cold misses, (B) fewer capacity misses, (C) less false sharing, (D) fewer conflict misses, (E) lower latency.
+- Problem 2: on a 12-core machine, a program keeps a global array `sums` of 12 `int`s, one per chunk. A `cilk_for` loop calls a function for each of the 12 chunk ids in parallel, and that function sets its chunk's entry to 0 and then adds the integers 0 through 4999 into it one at a time. Which phenomena could make this code use the L1 cache ineffectively? The choices: (A) true sharing, (B) false sharing, (C) capacity misses, (D) conflict misses, (E) TLB misses.
+
+## Your task
+
+The later exercises use this exercise's simulator too (they use `_shared/08_cache_sim.hpp`, which has the same interface). Write it yourself once first, and afterwards you'll know what the miss numbers mean. Multilevel caches and miss-ratio curves come in 1103.
+
+> ⚠️ **Spoiler warning:** `_shared/08_cache_sim.hpp` is a complete simulator, which amounts to the solution to this exercise and most of 1103; don't open it until you're done.
+
+Instead of answering the recitation's multiple-choice questions, you build the simulator that measures the answers: a set-associative LRU cache, the 3C classification of misses, and per-core caches with invalidation.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Direct-mapped
 
-`CacheSimulator(capacity_bytes, line_bytes, ways)`：capacity = sets × ways × line。`line_bytes` 必須是 2 的次方，`sets` 也必須是 2 的次方，`ways ≥ 1`，否則建構子丟 `std::invalid_argument`。
+```cpp
+class CacheSimulator {
+public:
+    CacheSimulator(std::size_t capacity_bytes, std::size_t line_bytes, std::size_t ways);
 
-- `access(address)`：存取一個位址，命中回傳 `true`。
-- `access_range(address, bytes)`：把 `[address, address + bytes)` 涵蓋到的每條 line 各存取一次；`bytes == 0` 什麼都不做。
-- `accesses()`、`misses()`、`hits()`：累計次數。`access_range` 跨 3 條 line 就算 3 次 access。
+    bool access(std::uint64_t address);
+    void access_range(std::uint64_t address, std::size_t bytes);
+    std::uint64_t accesses() const;
+    std::uint64_t misses() const;
+    std::uint64_t hits() const;
+};
+```
 
-這關只測 `ways == 1`：同一個 set 只有一條 line，line 內的兩個位址要算命中，同 set 不同 line 要互相踢掉。`line_bytes == 1` 或只有一個 set 時，offset 或 index 的位數是 0；位址 `~0` 也是合法的位址，不可以拿任何 tag 值當「空」的記號，`access_range` 碰到位址空間頂端也不可以溢位。
+`CacheSimulator(capacity_bytes, line_bytes, ways)`: capacity = sets × ways × line. `line_bytes` must be a power of 2, `sets` must also be a power of 2, and `ways ≥ 1`; otherwise the constructor throws `std::invalid_argument`.
+
+- `access(address)`: access one address and return `true` on a hit.
+- `access_range(address, bytes)`: access each line that `[address, address + bytes)` covers exactly once; `bytes == 0` does nothing.
+- `accesses()`, `misses()`, `hits()`: running totals. An `access_range` that spans 3 lines counts as 3 accesses.
+
+This stage tests only direct-mapped behavior, `ways == 1` (the geometry checks and the overflow test also build 2- and 4-way caches, but they touch each line only once): each set holds a single line, two addresses within one line must count as a hit, and different lines in the same set must evict each other. When `line_bytes == 1` or there is only one set, the offset or the index has 0 bits. The address `~0` is a legal address too, so you must not use any tag value as an "empty" marker, and `access_range` must not overflow when it reaches the top of the address space.
 
 ## Stage 2 — Set-associative LRU
 
-一般的 `ways`：每個 set 最多 `ways` 條 line，滿了就踢掉最久沒用的（LRU）。命中也要更新最近使用。`ways == capacity / line` 時就是 fully associative。一次存取的成本只能跟 `ways` 有關，不可以隨總 line 數變慢（`PERF` 會用一百萬個 set 檢查）。
+General `ways`: each set holds at most `ways` lines, and when it is full, evict the least recently used one (LRU). A hit must also update the recency. With `ways == capacity / line`, the cache is fully associative. The cost of one access may depend only on `ways`; it must not slow down as the total number of lines grows (a `PERF` test checks this with a million sets).
 
-## Stage 3 — 3C 分類
+## Stage 3 — 3C classification
 
-每次 miss 都歸類，寫進三個計數器：
+```cpp
+// in class CacheSimulator
+std::uint64_t cold_misses() const;
+std::uint64_t conflict_misses() const;
+std::uint64_t capacity_misses() const;
+```
 
-- `cold_misses()`：這條 line 從沒被存取過。
-- `conflict_misses()`：不是 cold，但如果是**同樣容量的 fully-associative LRU** 快取就不會 miss。
-- `capacity_misses()`：不是 cold，fully-associative 也救不了。
+Classify every miss into one of three counters:
 
-所以你要在內部維護一個同容量的 fully-associative 影子快取。`cold + conflict + capacity == misses` 恆成立。
+- `cold_misses()`: the line has never been accessed before.
+- `conflict_misses()`: not cold, but a **fully associative LRU cache of the same capacity** would not have missed.
+- `capacity_misses()`: not cold, and full associativity wouldn't have saved it either.
 
-## Stage 4 — 多核心與 false sharing
+So you need to maintain a fully associative shadow cache of the same capacity internally. `cold + conflict + capacity == misses` always holds.
 
-`CoherentCaches(cores, capacity_bytes, line_bytes, ways)`：每個 core 一份私有快取（`CacheSimulator` 的規則）。
+## Stage 4 — Multiple cores and false sharing
 
-- `read(core, address)` / `write(core, address)`：命中回傳 `true`，miss 把 line 載入該 core。
-- `write` 會讓**其他** core 上同一條 line 失效（無效化 invalidation，把它們清掉）。
-- `coherence_misses()`：一個 core 因為先前被別人的 write 無效化，所以 miss 的次數（全部 core 加總，cold 不算）。
+```cpp
+class CoherentCaches {
+public:
+    CoherentCaches(std::size_t cores, std::size_t capacity_bytes, std::size_t line_bytes,
+                   std::size_t ways);
 
-Recitation 8 第 2 題的 `sums[chunk_id]` 陣列在測試裡直接驗：相鄰元素在同一條 line 時，coherence miss 會爆量；每個元素自己一條 line 時，一次都不會有。
+    bool read(std::size_t core, std::uint64_t address);
+    bool write(std::size_t core, std::uint64_t address);
+    std::uint64_t coherence_misses() const;
+};
+```
 
-## 面試追問
+`CoherentCaches(cores, capacity_bytes, line_bytes, ways)`: one private cache per core (following `CacheSimulator`'s rules).
 
-1. 同容量下，set-associative 比 direct-mapped 少了哪一種 miss？為什麼 cold miss 不會少？（Recitation 8 第 1 題）
-2. 真實 L1 大多是 8-way 而不是 fully associative，取捨是什麼？
-3. 把 Stage 4 的計數換成「時間」，false sharing 的代價大概是幾個 cycle？如果一個 thread 只寫一個 `int`，能用什麼手段修？（`alignas`、padding、per-thread 計數加 reducer）
+- `read(core, address)` / `write(core, address)`: return `true` on a hit; a miss loads the line into that core's cache.
+- `write` invalidates the same line in every **other** core's cache (invalidation: the line is removed from them).
+- `coherence_misses()`: the number of misses a core takes because another core's earlier write invalidated the line (summed over all cores; cold misses don't count).
+
+The tests check Recitation 8 Problem 2's `sums[chunk_id]` array directly: when adjacent elements share a line, coherence misses explode; when every element has a line of its own, there are none at all.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. At the same capacity, which kind of miss does a set-associative cache have fewer of than a direct-mapped one? Why don't cold misses go down? (Recitation 8 Problem 1)
+2. Real L1 caches are mostly 8-way rather than fully associative. What is the trade-off?
+3. If you turned Stage 4's counts into "time", roughly how many cycles does false sharing cost? If each thread writes only one `int`, how can you fix it? (`alignas`, padding, per-thread counters plus a reducer)
+
+---
+
+**Official solution:** [R8 Solutions](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/03993e6ee1513a35460c2ffaf7b07fd6_MIT6_172F18_rec8sol.pdf). Read it after you finish.

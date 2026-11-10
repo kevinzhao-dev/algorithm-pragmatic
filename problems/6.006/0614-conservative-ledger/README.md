@@ -1,6 +1,6 @@
 ---
-title: 守恆的狀態機（每個迴圈的點數差都必須為 0）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: Conservative State Machine (every loop must net zero points)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 PS6 Problem 6-4
 pdf: materials/6.006/psets/ps6/questions.pdf
 answer: materials/6.006/psets/ps6/solutions.pdf
@@ -9,40 +9,71 @@ kind: code
 minutes: 90
 ---
 
-# 0614 · 守恆的狀態機
+# 0614 · Conservative State Machine
 
-> **實務上為什麼會遇到**：計費系統、遊戲經濟、配額管理都是狀態機加上點數增減。只要有一個可以無限繞的迴圈會賺點數（或虧點數），系統遲早會被玩壞；上線前可以用靜態分析先擋下來。
+**Original problem:** [Problem Set 6 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0cb5c705752261af9da744c22925a136_MIT6_006S20_ps6_questions.pdf) · **Read first:** [Lecture 12: Bellman-Ford notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/2430d7903a5529451d80c17f89a41fe8_MIT6_006S20_lec12.pdf), [Lecture 14: ASP & Johnson’s Algorithm notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/7d7d5c35490f41b7b037cafbda7019ad_MIT6_006S20_lec14.pdf)
 
-一個狀態機有 `states` 個狀態（`0 … states-1`），每個轉移都會改變使用者的點數：
+> **Why this comes up in practice:** billing systems, game economies, and quota management are all state machines plus points that go up and down. If even one loop that can be repeated forever earns points (or loses them), the system will be gamed sooner or later; static analysis can catch it before launch.
+
+## Original problem
+
+6.006 PS6 Problem 6-4 is set in a made-up physics in which a force field charges a particle some amount of work, possibly negative, to move along a path. A field is conservative when every closed loop has net work 0. The discrete version has n locations ℓᵢ and O(n) one-way transitions: transition (ℓᵢ, ℓⱼ, wᵢⱼ) takes a particle from ℓᵢ to ℓⱼ for an integer amount of work wᵢⱼ, which can be negative, and it need not have a reverse counterpart.
+
+Give an O(n²)-time test for whether the field is conservative.
+
+## Your task
+
+A state machine has `states` states (`0 … states-1`), and every transition changes the user's points:
 
 ```cpp
 struct Transition { int from; int to; std::int64_t delta; };
 ```
 
-系統是**守恆**的，代表「從任一個狀態出發，繞任意一圈回到原狀態，點數的總變化都是 0」（只看沿著轉移方向走得通的圈；轉移是單向的，`a → b` 不代表有 `b → a`）。轉移可以是 self-loop，也可以有多條平行轉移。
+The system is **conservative** when, starting from any state and going around any loop back to that state, the total change in points is 0 (only loops you can actually follow in the direction of the transitions count; transitions are one-way, and `a → b` doesn't imply `b → a`). A transition can be a self-loop, and there can be several parallel transitions.
 
-狀態機不一定連通。可能有上百萬個狀態，**不可以遞迴**。一次只看一關，做完再往下讀。
+The state machine isn't necessarily connected. There may be millions of states, so **do not use recursion**.
 
-## Stage 1 — 判斷
+Stage 1 is the original problem. Stage 2 also returns a loop that breaks the rule, and Stage 3 brings the check down to linear time.
 
-`is_conservative(states, transitions)`：回傳系統是否守恆。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-要 O(states · |transitions|)，`states` 到幾千時要撐得住。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 找出違規的迴圈
+## Stage 1 — The verdict
 
-`find_unbalanced_cycle(states, transitions)`：系統不守恆時，回傳一個點數總變化不為 0 的**簡單**迴圈，以 `transitions` 的**索引**依序列出（第 `i` 個的 `to` 是第 `i+1` 個的 `from`，最後一個接回第一個，每個狀態最多經過一次）。守恆時回傳 `std::nullopt`。
+```cpp
+bool is_conservative(int states, std::span<const Transition> transitions);
+```
 
-要 O(states · |transitions|)。
+`is_conservative(states, transitions)`: return whether the system is conservative.
 
-## Stage 3 — 線性時間
+Must run in O(states · |transitions|), and must hold up when `states` reaches a few thousand.
 
-把 `is_conservative` 改成 **O(states + |transitions|)**。這題的資料量（幾百萬）用 Bellman-Ford 跑不完。
+## Stage 2 — Finding the offending loop
 
-（Stage 2 的 `find_unbalanced_cycle` 不用變快。）
+```cpp
+std::optional<std::vector<std::size_t>> find_unbalanced_cycle(
+    int states, std::span<const Transition> transitions);
+```
 
-## 面試追問
+`find_unbalanced_cycle(states, transitions)`: when the system is not conservative, return a **simple** loop whose total change in points is not 0, listed in order as **indices** into `transitions` (the `to` of entry `i` is the `from` of entry `i+1`, the last one connects back to the first, and the loop passes through each state at most once). Return `std::nullopt` when the system is conservative.
 
-1. 為什麼只要檢查「沒有負環」和「沒有正環」就足夠？跟守恆的定義怎麼對應？
-2. Stage 3 為什麼可以用 potential 的想法？為什麼不能直接對整張圖指派 potential？（`a → b` 和 `c → b` 兩條邊沒有環，但 potential 可能衝突。）
-3. 如果現在要回傳的是「守恆」的憑證，一個正確的 potential 函數就是憑證：驗證它要多少時間？
+Must run in O(states · |transitions|).
+
+## Stage 3 — Linear time
+
+Make `is_conservative` run in **O(states + |transitions|)**. At this data size (millions), Bellman-Ford won't finish in time.
+
+(Stage 2's `find_unbalanced_cycle` doesn't need to get faster.)
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is it enough to check that there is no negative cycle and no positive cycle? How does that map to the definition of conservative?
+2. Why can Stage 3 use the idea of a potential? Why can't you assign potentials over the whole graph directly? (The two edges `a → b` and `c → b` form no cycle, but their potentials may conflict.)
+3. Suppose you now had to return a certificate that the system is conservative. A correct potential function is such a certificate: how long does it take to verify one?
+
+---
+
+**Official solution:** [Problem Set 6 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9073af3b8151002c5f63d06dc7ac961e_MIT6_006S20_ps6_solutions.pdf). Read it after you finish.

@@ -1,6 +1,6 @@
 ---
-title: 手算 Dijkstra 轉成程式（relaxation 順序與合法性檢查）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: Pencil-and-Paper Dijkstra as Code (relaxation order and legality checks)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 PS6 Problem 6-1
 pdf: materials/6.006/psets/ps6/questions.pdf
 answer: materials/6.006/psets/ps6/solutions.pdf
@@ -9,11 +9,22 @@ kind: code
 minutes: 60
 ---
 
-# 0611 · 手算 Dijkstra 轉成程式
+# 0611 · Pencil-and-Paper Dijkstra as Code
 
-> **實務上為什麼會遇到**：要判斷一個實作對不對，光看最後的距離不夠，還要看「過程」是否符合演算法。寫一個 trace checker 是把演算法的不變量真正想清楚的好方法，property-based testing 也常常這樣用。
+**Original problem:** [Problem Set 6 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0cb5c705752261af9da744c22925a136_MIT6_006S20_ps6_questions.pdf) · **Read first:** [Lecture 11: Weighted Shortest Paths notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/aa57a9785adf925bc85c1920f53755a0_MIT6_006S20_lec11.pdf), [Lecture 13: Dijkstra’s Algorithm notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/d819e7f4568aced8d5b59e03db6c7b67_MIT6_006S20_lec13.pdf)
 
-原題要你手算兩個演算法的 relaxation 順序。這裡把過程寫成程式，再反過來寫一個檢查器。圖的型別：
+> **Why this comes up in practice:** to judge whether an implementation is correct, the final distances aren't enough; you also have to check that the process follows the algorithm. Writing a trace checker is a good way to really think through an algorithm's invariants, and property-based testing often uses it the same way.
+
+## Original problem
+
+6.006 PS6 Problem 6-1 works by hand on a small DAG whose edge weights are all nonnegative. Its vertices are a–f, and its weighted edges are a→b (2), a→d (6), b→c (1), b→e (3), b→f (2), d→b (1), d→e (0), e→f (2) and f→c (1).
+
+- (a) Starting from a, trace DAG Relaxation and Dijkstra. Both attempt to relax every edge, just in different sequences; write out each algorithm's sequence of attempted edges, called its relaxation order. Break any tie between vertices, or between outgoing edges, alphabetically.
+- (b) Give δ(a, v) for every vertex v.
+
+## Your task
+
+The original problem has you work out the relaxation order of two algorithms by hand. Here you write that process as code, and then turn it around and write a checker. The graph types:
 
 ```cpp
 struct Arc { int to; std::int64_t weight; };
@@ -25,28 +36,55 @@ struct RelaxationTrace {
 };
 ```
 
-`dist` 是最短距離（到不了為 `kUnreachable`）。`order` 列出**所有從 `s` 可達頂點出發的邊**，每條恰好一次，依「嘗試 relax」的先後排列。起點不存在時丟 `std::out_of_range`。一次只看一關，做完再往下讀。
+`dist` holds the shortest distances (`kUnreachable` when unreachable). `order` lists **every edge that leaves a vertex reachable from `s`**, each exactly once, in the order the edges are tried for relaxation. Throw `std::out_of_range` when the source doesn't exist.
+
+Stages 1 and 2 answer parts (a) and (b) for any input graph, with fixed tie-breaking rules, and Stage 3, the checker, goes beyond the original.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
 
 ## Stage 1 — DAG Relaxation
 
-`dag_relaxation_trace(g, s)`，保證 `g` 是 DAG，權重可為負。只考慮從 `s` 可達的頂點，依拓撲順序處理；當有多個頂點可以處理時，選編號最小的；同一個頂點的出邊依 `to` 由小到大嘗試。
+```cpp
+inline constexpr std::int64_t kUnreachable = std::numeric_limits<std::int64_t>::max();
+
+RelaxationTrace dag_relaxation_trace(const WeightedGraph& g, int source);
+```
+
+`dag_relaxation_trace(g, s)`: `g` is guaranteed to be a DAG, and weights may be negative. Consider only the vertices reachable from `s` and process them in topological order; when more than one vertex could be processed next, pick the one with the smallest ID. Try the outgoing edges of a vertex in increasing order of `to`.
 
 ## Stage 2 — Dijkstra
 
-`dijkstra_trace(g, s)`，保證權重非負（可以有環）。下一個處理的頂點是 `(距離估計, 編號)` 最小的未處理可達頂點；同一個頂點的出邊依 `to` 由小到大嘗試。
+```cpp
+RelaxationTrace dijkstra_trace(const WeightedGraph& g, int source);
+```
 
-## Stage 3 — 合法順序檢查器
+`dijkstra_trace(g, s)`: weights are guaranteed to be nonnegative (cycles are allowed). The next vertex to process is the unprocessed reachable vertex with the smallest `(distance estimate, ID)`. Try the outgoing edges of a vertex in increasing order of `to`.
 
-`is_legal_dijkstra_order(g, s, order)`：判斷 `order` 是否可能是**某一次** Dijkstra 的 relaxation 順序，不限 tie-breaking 方式：
+## Stage 3 — A legal-order checker
 
-- 每次取出頂點時，只要它的估計距離在當下是最小的都算合法（平手的順序不限）；同一個頂點的出邊可以任意順序，但必須連續出現、恰好各一次。
-- 從 `s` 可達、又有出邊的頂點都必須出現；沒有出邊的頂點不會出現在 `order` 裡，不影響判斷。
-- `order` 裡出現不存在的頂點或邊時回傳 `false`。
+```cpp
+bool is_legal_dijkstra_order(const WeightedGraph& g, int source,
+                             std::span<const RelaxedEdge> order);
+```
 
-要 O((V + E) log V)。
+`is_legal_dijkstra_order(g, s, order)`: decide whether `order` could be the relaxation order of **some** run of Dijkstra, with any tie-breaking:
 
-## 面試追問
+- Extracting a vertex is legal whenever its distance estimate is the smallest at that moment (ties may be broken in any order). The outgoing edges of a vertex may come in any order, but they must appear consecutively, each exactly once.
+- Every vertex that is reachable from `s` and has outgoing edges must appear; a vertex with no outgoing edges never appears in `order` and doesn't affect the verdict.
+- Return `false` if `order` contains a vertex or an edge that doesn't exist.
 
-1. 為什麼 DAG Relaxation 的順序不必依距離，Dijkstra 卻一定要？
-2. 兩個頂點最終距離相同時，先處理哪個重要嗎？如果有權重為 0 的邊，你的檢查器要特別注意什麼？
-3. 這種 trace checker 可以怎麼用在壓力測試上？它能抓到哪些光比對最終距離抓不到的 bug？
+Must run in O((V + E) log V).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why doesn't DAG Relaxation need to go in order of distance, while Dijkstra must?
+2. When two vertices end up at the same distance, does it matter which one is processed first? If there are edges of weight 0, what does your checker need to watch out for?
+3. How could you use a trace checker like this in stress testing? Which bugs can it catch that comparing the final distances alone can't?
+
+---
+
+**Official solution:** [Problem Set 6 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9073af3b8151002c5f63d06dc7ac961e_MIT6_006S20_ps6_solutions.pdf). Read it after you finish.

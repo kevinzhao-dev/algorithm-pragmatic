@@ -1,6 +1,6 @@
 ---
-title: FFT 與多項式乘法（含數值合約與 NTT）
-unit: 02 · FFT 與 B-Trees（PS2）
+title: FFT and Polynomial Multiplication (with a numeric contract and NTT)
+unit: 02 · FFT and B-Trees (PS2)
 source: 6.046J Lecture 3
 pdf: materials/6.046j/lectures/lec03.pdf
 read: materials/6.046j/lectures/lec03.pdf
@@ -8,54 +8,91 @@ kind: code
 minutes: 180
 ---
 
-# 0201 · FFT 與多項式乘法
+# 0201 · FFT and Polynomial Multiplication
 
-> **實務上為什麼會遇到**：卷積出現在訊號處理、影像濾鏡、大整數運算，以及「兩個直方圖的和的分布」這類統計。FFT 把 O(n²) 降到 O(n log n)，但要回傳**精確整數**時，這段程式最常壞在浮點捨入。
+**Based on:** [Divide & Conquer: FFT](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/3dc84e78914f226665357234d6f4e25c_MIT6_046JS15_lec03.pdf) · **Read first:** [Divide & Conquer: FFT](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/3dc84e78914f226665357234d6f4e25c_MIT6_046JS15_lec03.pdf)
 
-多項式用係數向量表示，`a[i]` 是 `x^i` 的係數。兩個多項式都非空時，乘積長度一定是 `|a| + |b| − 1`（**不要**修掉尾端的 0）；任一方為空時回傳空。
+> **Why this comes up in practice:** convolution shows up in signal processing, image filters, big-integer arithmetic, and statistics such as "the distribution of the sum of two histograms". FFT brings O(n²) down to O(n log n), but when the result must be **exact integers**, this code most often breaks on floating-point rounding.
 
-## Stage 1 — 直接相乘
+## Your task
 
-`multiply_naive(a, b)`：O(|a|·|b|)。這是之後測試的對照組，也是大多數小輸入的最佳解。
+A polynomial is a vector of coefficients, where `a[i]` is the coefficient of `x^i`. When both polynomials are non-empty, the product always has length `|a| + |b| − 1` (do **not** trim trailing 0s); if either one is empty, return an empty result.
+
+You build the FFT from Lecture 3, use it for exact integer multiplication under an explicit precision contract, switch to a number-theoretic transform (NTT) for exact modular products, and finish with big-integer multiplication.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Direct multiplication
+
+```cpp
+std::vector<std::int64_t> multiply_naive(std::span<const std::int64_t> a,
+                                         std::span<const std::int64_t> b);
+```
+
+`multiply_naive(a, b)`: O(|a|·|b|). It is the reference that later tests compare against, and also the best solution for most small inputs.
 
 ## Stage 2 — FFT
 
-`fft(a, inverse)`：`a.size()` 必須是 2 的冪次，否則丟 `std::invalid_argument`（0 也算不合法）。就地轉換，O(n log n)。
+```cpp
+using Complex = std::complex<double>;
 
-- Forward：`â[k] = Σ_j a[j] · e^{+2πi·jk/n}`（正指數，跟 Lecture 3 一樣）。
-- Inverse：`a[j] = (1/n) Σ_k â[k] · e^{−2πi·jk/n}`，要自己除以 `n`。
+void fft(std::span<Complex> a, bool inverse = false);
+```
 
-## Stage 3 — 整數乘法與數值合約
+`fft(a, inverse)`: `a.size()` must be a power of 2; otherwise throw `std::invalid_argument` (0 is invalid too). Transform in place, in O(n log n).
 
-`multiply(a, b)`：回傳**精確**的整數乘積，O(n log n)。
+- Forward: `â[k] = Σ_j a[j] · e^{+2πi·jk/n}` (a positive exponent, as in Lecture 3).
+- Inverse: `a[j] = (1/n) Σ_k â[k] · e^{−2πi·jk/n}`; you must divide by `n` yourself.
 
-| 符號 | 意義 |
+## Stage 3 — Integer multiplication and the numeric contract
+
+```cpp
+std::vector<std::int64_t> multiply(std::span<const std::int64_t> a,
+                                   std::span<const std::int64_t> b);
+```
+
+`multiply(a, b)`: return the **exact** integer product, in O(n log n).
+
+| Symbol | Meaning |
 | --- | --- |
 | `n` | `\|a\| + \|b\|` |
-| `A`、`B` | `a`、`b` 中係數的最大絕對值 |
+| `A`, `B` | The largest absolute value of a coefficient in `a` and in `b`, respectively |
 
-**合約**：只要 `n · A · B ≤ 2^42`（約 4.4×10¹²），必須回傳精確結果；超過時丟 `std::domain_error`，不可以回傳可能捨入錯誤的值。計算這個條件時要小心溢位，`A`、`B` 可能接近 `int64` 上限。
+**Contract:** whenever `n · A · B ≤ 2^42` (about 4.4×10¹²), you must return the exact result; beyond that, throw `std::domain_error`, and never return a value that might be rounded wrong. Watch out for overflow when you evaluate this condition, because `A` and `B` can be close to the `int64` limit.
 
-為什麼是這條線：`double` 的 FFT 捨入誤差大約和 `ε · ‖a‖₂ · ‖b‖₂` 同階（`ε ≈ 1.1×10⁻¹⁶`，再乘上隨 log n 緩慢成長的常數）。在合約內這個值遠小於 0.5，四捨五入一定正確。
+Why the line is drawn there: the rounding error of a `double` FFT is roughly on the order of `ε · ‖a‖₂ · ‖b‖₂` (`ε ≈ 1.1×10⁻¹⁶`, times a constant that grows slowly with log n). Within the contract this value is far below 0.5, so rounding to the nearest integer is always correct.
 
-要做到這件事，有幾個容易踩的點：
+Getting there has a few common pitfalls:
 
-- Twiddle factor 要**逐項直接算**或查表。用 `w *= w_step` 累積的話，到合約上限誤差會超過 0.5，測試會抓到。
-- 用 `std::llround`，不是截斷（`2.9999999` 不是 2）。
-- 測試的主力案例是合約上限（`n = 2^20`、`A = B = 2048`）、所有係數滿載且正負號隨機。
+- **Compute each twiddle factor directly** or look it up in a table. If you accumulate them with `w *= w_step`, the error exceeds 0.5 at the contract limit, and the tests will catch it.
+- Use `std::llround`, not truncation (`2.9999999` is not 2).
+- The main test cases sit at the contract limit (`n = 2^20`, `A = B = 2048`), with every coefficient at full magnitude and random signs.
 
 ## Stage 4 — NTT
 
-`multiply_mod(a, b)`：所有係數都已化簡到 `[0, kNttModulus)`（否則丟 `std::invalid_argument`），模 `998244353 = 119·2²³ + 1`（原根 3）回傳乘積，不用浮點數。`|a| + |b| − 1` 超過 `2^23` 時丟 `std::length_error`。
+```cpp
+inline constexpr std::uint32_t kNttModulus = 998'244'353;  // provided
 
-## Stage 5 — 實務延伸：大整數相乘
+std::vector<std::uint32_t> multiply_mod(std::span<const std::uint32_t> a,
+                                        std::span<const std::uint32_t> b);
+```
 
-`multiply_decimal(a, b)`：`a`、`b` 是十進位字串，可以有前導 `-`、可以有前導 0。其他格式（空字串、只有 `-`、非數字）丟 `std::invalid_argument`。回傳規範化字串，沒有多餘的 0，`0` 沒有負號。
+`multiply_mod(a, b)`: every coefficient is already reduced into `[0, kNttModulus)` (otherwise throw `std::invalid_argument`). Return the product modulo `998244353 = 119·2²³ + 1` (primitive root 3), without using floating point. Throw `std::length_error` when `|a| + |b| − 1` exceeds `2^23`.
 
-要能在時限內處理兩個各一百萬位的數。Stage 3 的合約決定你每一格能放幾位，選錯了就會丟例外。
+## Stage 5 — Real-world extension: multiplying big integers
 
-## 面試追問
+```cpp
+std::string multiply_decimal(std::string_view a, std::string_view b);
+```
 
-1. FFT 為什麼一定要 2 的冪次？`n` 不是 2 的冪次時你會怎麼處理？
-2. 把合約放寬到 `n·A·B ≤ 2^60`，要怎麼改？（比較 long double、拆成多組 FFT、NTT 搭配 CRT。）
-3. 只想算 `a` 和自己的卷積，或兩個實數序列的卷積，怎麼把 FFT 次數從 3 次降到 2 次？
+`multiply_decimal(a, b)`: `a` and `b` are decimal strings that may have a leading `-` and leading 0s. Throw `std::invalid_argument` for any other format (an empty string, a lone `-`, non-digits). Return the normalized string: no extra 0s, and `0` has no minus sign.
+
+It must handle two numbers of one million digits each within the time limit. The Stage 3 contract decides how many digits you can pack into each slot; choose wrong and you'll throw an exception.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why must this FFT have a power-of-2 size? How would you handle an `n` that isn't a power of 2?
+2. How would you change the code to relax the contract to `n·A·B ≤ 2^60`? (Compare long double, splitting into several FFTs, and NTT combined with CRT.)
+3. If you only need the convolution of `a` with itself, or of two real sequences, how do you cut the number of FFTs from 3 to 2?

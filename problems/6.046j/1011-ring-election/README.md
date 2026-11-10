@@ -1,6 +1,6 @@
 ---
-title: 匿名環上的 Leader Election（對稱性、隨機與不可能性）
-unit: 10 · Distributed Algorithms（PS10）
+title: Leader Election on an Anonymous Ring (symmetry, randomness, and impossibility)
+unit: 10 · Distributed Algorithms (PS10)
 source: 6.046J PS10 Problem 10-1
 pdf: materials/6.046j/psets/ps10/questions.pdf
 answer: materials/6.046j/psets/ps10/solutions.pdf
@@ -9,35 +9,69 @@ kind: code
 minutes: 130
 ---
 
-# 1011 · 匿名環上的 Leader Election
+# 1011 · Leader Election on an Anonymous Ring
 
-> **實務上為什麼會遇到**：沒有 UID 的 IoT 群組、需要打破對稱的共識協定，都會碰到一個基本事實：完全對稱的 deterministic 節點永遠選不出 leader；有了隨機性但不知道 n，問題仍然不可解。這題把三個論證全部變成可以跑的程式。
+**Original problem:** [Problem Set 10](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d4865809813b7de690cbdebb0bf8b4f4_MIT6_046JS15_pset10.pdf) · **Read first:** [Synchronous Distributed Algorithms: Symmetry-breaking. Shortest-paths Spanning Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/662439afce08e29eda88612482506f78_MIT6_046JS15_lec19.pdf)
 
-環由 `Topology::ring(n)` 建立（同步模型，`SyncNetwork`），所有 process **完全相同**，只有 port 方向感。一次只看一關。
+> **Why this comes up in practice:** IoT groups without UIDs and consensus protocols that must break symmetry all run into one basic fact: perfectly symmetric deterministic nodes can never elect a leader, and even with randomness the problem stays unsolvable when n is unknown. This exercise turns all three arguments into code you can run.
 
-## Stage 1 — Deterministic 為什麼不可能（Part a）
+## Original problem
+
+6.046J PS10 Problem 10-1 places n identical processes on a synchronous ring. Each process has ports to its two neighbors: the ports toward the clockwise neighbor are called left and those toward the counterclockwise neighbor right, so all processes share one sense of direction. The goal is to elect a single leader, meaning that eventually exactly one process outputs LEADER. Each part asks you either to give an algorithm and analyze its time and message complexity, or to prove that no such algorithm exists.
+
+- (a) The processes are deterministic and know n, the size of the ring.
+- (b) The processes are randomized and know n. The algorithm must never elect more than one leader, and must elect one eventually with probability 1. Relate the complexity to the success probability: for any ε with 0 < ε < 1, give time and message bounds that hold with probability at least 1 − ε.
+- (c) The processes are randomized but don't know n, so one algorithm has to work on rings of every size. The requirements and the analysis are the same as in (b).
+
+## Your task
+
+The ring is built by `Topology::ring(n)` (the synchronous model, `SyncNetwork`). All processes are **identical**; the only thing they have is a sense of port direction.
+
+Each stage turns one part into code: Stage 1 checks the symmetry argument behind part (a), Stage 2 implements a randomized election for part (b), and Stage 3 builds a harness that acts out the argument for part (c).
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Why deterministic election is impossible (Part a)
 
 ```cpp
 template <typename P>
 bool symmetry_preserved(std::function<P()> make, int n, int rounds);
 ```
 
-用 `make()` 建立 n 個 process 放上環，依序跑 `rounds` 回合（`net.step()`），每一回合之後比較所有 process 的 `state_digest()`（`P` 提供，回傳 `std::string`）。全部相同回傳 `true`，一旦有差異回傳 `false`。測試會餵 deterministic 的 process 確認對稱不可能被打破，也會餵一個偷偷帶有不同內部編號的 process，確認你的檢查真的有比。
+Create n processes with `make()` and place them on a ring, run `rounds` rounds one at a time (`net.step()`), and after each round compare the `state_digest()` of every process (`P` provides it, and it returns a `std::string`). Return `true` if they are all the same, and `false` as soon as any of them differ.
 
-（這就是 lecture 的數學歸納法證明：相同的狀態、相同的 port 輸入，下一回合還是相同的狀態。）
+The tests also require these details: call `make()` once for each of the n processes; compare the digests once before the first round as well, so that `rounds = 0` still checks the initial states; and if every process halts before `rounds` rounds are up (`net.step()` returns `false`), stop and return `true`. The tests feed in deterministic processes to confirm that symmetry can't be broken, and also a process that secretly carries a different internal number, to confirm that your check really compares.
 
-## Stage 2 — 隨機化，知道 n（Part b）
+(This is the lecture's proof by induction: the same state and the same port inputs lead to the same state in the next round.)
 
-`RandomizedElection(int n, std::uint64_t seed)`：同步 process，同時滿足：
+## Stage 2 — Randomized, knowing n (Part b)
 
-1. **Safety**：任何時候至多一個 process 輸出 leader（`is_leader()`）。
-2. **Termination**（機率 1）：最終全部 `halted()`，恰好一個 `is_leader()`。
-3. `phases()` 回傳用了幾個 phase；每個 phase 至多 `n` 回合、至多 `n²` 則訊息（`stats.rounds ≤ n·phases`、`stats.messages ≤ n²·phases`）。
-4. 每個 phase 成功機率至少 1/2：phases 超過 `h` 的比例在統計上必須 ≤ `2^-h`（測試用多個 seed 量測 tail）。
+```cpp
+class RandomizedElection {
+public:
+    using Message = std::int64_t;
+    RandomizedElection(int n, std::uint64_t seed);
 
-提示：每個 process 每個 phase 從 `1..n²` 隨機取 id，往順時針傳 n 回合，看最大值是否唯一。
+    void send(std::int64_t round, netsim::Outbox<Message>& out);
+    void receive(std::int64_t round, std::span<const std::optional<Message>> inbox);
+    bool halted() const;
+    bool is_leader() const;
+    int phases() const;
+};
+```
 
-## Stage 3 — 不知道 n 為什麼不可能（Part c）
+`RandomizedElection(int n, std::uint64_t seed)`: a synchronous process that satisfies all of the following:
+
+1. **Safety:** at any time, at most one process outputs leader (`is_leader()`).
+2. **Termination** (with probability 1): eventually every process is `halted()` and exactly one is `is_leader()`.
+3. `phases()` returns how many phases were used, and every process must report the same value (the tests read process 0's). Each phase takes at most `n` rounds and at most `n²` messages (`stats.rounds ≤ n·phases`, `stats.messages ≤ n²·phases`).
+4. Each phase succeeds with probability at least 1/2: the fraction of runs that need more than `h` phases must be statistically ≤ `2^-h` (the tests measure the tail over many seeds).
+
+Hint: in each phase, every process draws a random id from `1..n²` and passes it clockwise for n rounds, then checks whether the maximum is unique.
+
+## Stage 3 — Why it's impossible without knowing n (Part c)
 
 ```cpp
 struct MirrorResult { int leaders_small = 0; int leaders_large = 0; };
@@ -45,12 +79,18 @@ template <typename P, typename Make>
 MirrorResult mirror_attack(Make make, int n, std::uint64_t seed, std::int64_t max_rounds);
 ```
 
-`make(s)` 回傳一個用隨機種子 `s` 的 process（`P`，不知道 n，有 `is_leader()`）。在環 `n` 上執行（第 i 個節點種子 `seed+i`），再在環 `2n` 上執行：位置 `i` 和 `i+n` 用**相同**的種子 `seed+i`（複製 random tape）。回傳兩次的 leader 數。
+`make(s)` returns a process that uses random seed `s` (a `P` that doesn't know n and has `is_leader()`). Run it on a ring of size `n` (node i gets seed `seed+i`), then on a ring of size `2n`, where positions `i` and `i+n` get the **same** seed `seed+i` (a copied random tape). Return the number of leaders in each run. Run each ring for at most `max_rounds` rounds (for example with `net.run(max_rounds)`), because the candidate processes need not halt on their own.
 
-這個 harness 把論證具體化：只要環 `n` 上選得出 leader，環 `2n` 的鏡像執行就有兩個 leader——沒有演算法同時正確處理這兩種大小。
+This harness makes the argument concrete: whenever the ring of size `n` elects a leader, the mirrored run on the ring of size `2n` has two leaders, so no algorithm handles both sizes correctly.
 
-## 面試追問
+## Interview follow-ups
 
-1. Part (a) 的證明為什麼需要「確定性」和「相同的 port labeling」？如果 port 標籤不一致呢？
-2. 為什麼 Stage 2 只需要 `1..n²` 的 id 空間？為什麼用 birthday bound 算成功機率？成功機率跟時間怎麼換算？
-3. 分散式系統在實務上怎麼解決 Stage 3 的 impossibility？（用 n 的上界、用 UID、或放棄確定性保證）
+Once you're done, answer without looking at your code:
+
+1. Why does the proof of Part (a) need "determinism" and "the same port labeling"? What if the port labels were inconsistent?
+2. Why does Stage 2 need an id space of only `1..n²`? Why use the birthday bound to compute the success probability? How do you convert between success probability and time?
+3. In practice, how do distributed systems get around the impossibility in Stage 3? (An upper bound on n, UIDs, or giving up deterministic guarantees.)
+
+---
+
+**Official solution:** [Solutions to Problem Set 10](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/7a3fe48c42ff8d2f7052e9fcf5054ae6_MIT6_046JS15_pset10sols.pdf). Read it after you finish.

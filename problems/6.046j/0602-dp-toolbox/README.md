@@ -1,6 +1,6 @@
 ---
-title: 區間 DP 工具箱（回文、最優 BST、取硬幣）
-unit: 06 · Augmentation、APSP 與 MST（PS6）
+title: Interval DP Toolbox (palindromes, optimal BST, coin game)
+unit: 06 · Augmentation, APSP, and MST (PS6)
 source: 6.046J Lecture 10, Recitation 5
 pdf: materials/6.046j/lectures/lec10.pdf
 read: materials/6.046j/lectures/lec10.pdf, materials/6.046j/recitations/rec05.pdf
@@ -8,19 +8,31 @@ kind: code
 minutes: 100
 ---
 
-# 0602 · 區間 DP 工具箱
+# 0602 · Interval DP Toolbox
 
-> **實務上為什麼會遇到**：diff 工具的 LCS、編譯器的 matrix-chain 與 register allocation、靜態字典的最優查找樹，全都是「把區間切開，猜切點」的同一招。面試題不會告訴你要用 DP，你要自己看出子問題是 `(i, j)`。
+**Based on:** [Dynamic Programming: Advanced DP](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/6144f2dfbe515abfbeb32f99a6907af7_MIT6_046JS15_lec10.pdf) · **Read first:** [Dynamic Programming: Advanced DP](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/6144f2dfbe515abfbeb32f99a6907af7_MIT6_046JS15_lec10.pdf), [Dynamic Programming: More Examples](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d187472426117c2ebec700a22c209b3f_MIT6_046JS15_Recitation5.pdf)
 
-講義四步驟：定義子問題 → 寫遞迴 → 由小到大計算 → 回溯出答案。每關都要真的走完第 4 步。
+> **Why this comes up in practice:** LCS in diff tools, matrix-chain ordering and register allocation in compilers, and the optimal search tree for a static dictionary all use the same trick: split an interval and guess where to cut. An interview question won't tell you to use DP; you have to see for yourself that the subproblem is `(i, j)`.
 
-## Stage 1 — 最長回文子序列（subsequence）
+## Your task
 
-`std::string longest_palindromic_subsequence(std::string_view s)`：回傳 `s` 的任一條最長回文子序列（順序相同、可跳字）。空字串回傳空字串。時間 O(n²)。
+The lecture notes' four steps: define the subproblems → write the recurrence → compute from small to large → backtrack to recover the answer. Every stage must actually carry out step 4.
 
-## Stage 2 — 最優 BST
+You implement five DPs from Lecture 10 and Recitation 5 across four stages, and each one has to produce its answer, not just fill a table.
 
-鍵 `0..n-1` 由小到大排好，權重 `weights[i]`。找出 BST 使 `Σ weights[i]·(depth(i)+1)` 最小（根深度 0）。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Longest palindromic subsequence
+
+```cpp
+std::string longest_palindromic_subsequence(std::string_view s);
+```
+
+`std::string longest_palindromic_subsequence(std::string_view s)`: return any longest palindromic subsequence of `s` (same order, characters may be skipped). Return an empty string for an empty string. O(n²) time.
+
+## Stage 2 — Optimal BST
+
+Keys `0..n-1` are sorted in increasing order, and key `i` has weight `weights[i]`. Find the BST that minimizes `Σ weights[i]·(depth(i)+1)` (the root has depth 0).
 
 ```cpp
 struct BstPlan {
@@ -31,20 +43,36 @@ struct BstPlan {
 BstPlan optimal_bst(std::span<const long long> weights);
 ```
 
-時間 O(n³)。邊界：沒有鍵、只有一個鍵。
+O(n³) time. Edge cases: no keys, and a single key.
 
-## Stage 3 — 兩人取硬幣
+## Stage 3 — Two-player coin game
 
-一排硬幣，兩人輪流從最左或最右取一枚，兩人都用最優策略。`long long first_player_value(std::span<const long long> values)` 回傳先手保證拿到的最大金額。時間 O(n²)。空序列回傳 0。
+```cpp
+long long first_player_value(std::span<const long long> values);
+```
 
-## Stage 4 — 再兩個切法
+Coins sit in a row. Two players take turns removing one coin from either the left end or the right end, and both play optimally. `long long first_player_value(std::span<const long long> values)` returns the largest amount the first player can guarantee. O(n²) time. Return 0 for an empty row.
 
-**堆塔**。`Block{length, width, height}` 不可旋轉；`A` 可放在 `B` 上方的條件是 `A.length ≤ B.length` 且 `A.width ≤ B.width`。`long long tallest_tower(std::span<const Block> blocks)` 回傳最高塔高，每塊至多用一次，無塊時 0。
+## Stage 4 — Two more ways to cut
 
-**布林括號**。`expr` 由 `T`/`F` 與運算子 `&`、`|`、`^` 交錯組成（例如 `T^F&T`，保證合法），`count_true(expr)` 回傳有多少種括號方式使結果為真，模 `1'000'000'007`。時間 O(n³)。
+```cpp
+struct Block {
+    long long length = 0;
+    long long width = 0;
+    long long height = 0;
+};
+long long tallest_tower(std::span<const Block> blocks);
+long long count_true(std::string_view expr);
+```
 
-## 面試追問
+**Tower stacking.** A `Block{length, width, height}` cannot be rotated. `A` can go on top of `B` when `A.length ≤ B.length` and `A.width ≤ B.width`. `long long tallest_tower(std::span<const Block> blocks)` returns the height of the tallest tower, using each block at most once; with no blocks it returns 0.
 
-1. 最優 BST 的 greedy（每次選權重最大的鍵當根）為什麼錯？舉出最小反例。Knuth 優化如何把 O(n³) 降到 O(n²)？
-2. 取硬幣：為什麼偶數枚時先手一定不輸？O(n²) 的 DP 比「選奇數位或偶數位」的策略多拿到什麼？
-3. 布林括號：為什麼要同時維護 true 與 false 兩張表？只留一張會發生什麼事？
+**Boolean parenthesization.** `expr` alternates between `T`/`F` and the operators `&`, `|`, and `^` (for example `T^F&T`; the input is guaranteed to be well formed). `count_true(expr)` returns the number of ways to parenthesize it so that it evaluates to true, modulo `1'000'000'007`. O(n³) time.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the greedy approach to optimal BSTs (always make the heaviest key the root) wrong? Give the smallest counterexample. How does Knuth's optimization bring O(n³) down to O(n²)?
+2. Coin game: why can the first player never lose when the number of coins is even? What does the O(n²) DP gain over the "take all the odd positions or all the even positions" strategy?
+3. Boolean parenthesization: why do you need two tables, one for true and one for false? What goes wrong if you keep only one?

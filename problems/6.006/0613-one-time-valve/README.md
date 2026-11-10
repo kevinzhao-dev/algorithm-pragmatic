@@ -1,6 +1,6 @@
 ---
-title: 重力管線的一次性閥門（狀態改變地形）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: One-Time Valve in a Gravity Pipeline (state that changes the terrain)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 PS6 Problem 6-3
 pdf: materials/6.006/psets/ps6/questions.pdf
 answer: materials/6.006/psets/ps6/solutions.pdf
@@ -9,11 +9,25 @@ kind: code
 minutes: 80
 ---
 
-# 0613 · 重力管線的一次性閥門
+# 0613 · One-Time Valve in a Gravity Pipeline
 
-> **實務上為什麼會遇到**：「某個動作會永久改變接下來可以走的路」在排程和配置變更裡很常見，例如切換 feature flag 之後整個呼叫圖都變了。關鍵是想清楚：動作前和動作後，你走的其實是同一張圖嗎？
+**Original problem:** [Problem Set 6 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0cb5c705752261af9da744c22925a136_MIT6_006S20_ps6_questions.pdf) · **Read first:** [Lecture 11: Weighted Shortest Paths notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/aa57a9785adf925bc85c1920f53755a0_MIT6_006S20_lec11.pdf), [Recitation 11 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/77ff36ad54779575d9ba8d8687f91b5b_MIT6_006S20_r11.pdf)
 
-一個靠重力輸水的管線網路，檢修機器人順著水流前進。
+> **Why this comes up in practice:** an action that permanently changes which paths are open afterward is common in scheduling and configuration changes; for example, flipping a feature flag changes the whole call graph. The key is to think it through: before and after the action, are you really walking the same graph?
+
+## Original problem
+
+6.006 PS6 Problem 6-3 follows a spy fleeing a mountain hideout on skis. Her map shows clearings and the slopes between them, n items altogether. She starts at clearing L beside the hideout and needs to reach the snowmobile parked at clearing S.
+
+- Clearing cᵢ ∈ C sits at integer elevation eᵢ.
+- A slope (cᵢ, cⱼ, ℓᵢⱼ) is a trail of positive integer length ℓᵢⱼ between two clearings, along which the elevation changes strictly monotonically. She never skis uphill, so she uses a slope only in its downhill direction.
+- Some known clearings are rigged with dynamite. Setting it off makes each rigged clearing sink at once by a fixed, known amount, so its elevation eᵢ becomes some eᵢ′ < eᵢ. The trigger is at clearing D ∈ C, which is not rigged; when she is at D she may set it off before moving on, or not.
+
+Give an O(n)-time algorithm for the shortest total skiing distance from L to S, where she may use the trigger on the way.
+
+## Your task
+
+A pipeline network carries water by gravity, and an inspection robot travels with the flow.
 
 ```cpp
 struct Pipe { int a; int b; std::int64_t length; };       // length > 0
@@ -27,28 +41,42 @@ struct PipeNetwork {
 };
 ```
 
-規則：
+Rules:
 
-- 機器人只能走 `head` **嚴格往下**的方向：從 `x` 經過管線到 `y` 需要當下 `head[x] > head[y]`。同高的兩端完全不能走。
-- 當機器人正在 `valve` 這個交點時，可以選擇觸發閥門（最多一次，不花時間）。觸發後，`drops` 裡所有交點的 `head` 立刻永久變成 `new_head`，之後都用新的 `head` 判斷能不能走。不一定要觸發。
+- The robot can only move in the direction in which `head` goes **strictly down**: going from `x` through a pipe to `y` requires `head[x] > head[y]` at that moment. A pipe whose two ends are at the same height can't be used at all.
+- While the robot is at the `valve` junction, it may choose to fire the valve (at most once, and it takes no time). Once it fires, the `head` of every junction in `drops` immediately and permanently becomes `new_head`, and from then on the new `head` decides which moves are possible. Firing is optional.
 
-`V = head.size()`、`E = pipes.size()`，兩者都可能到一百萬以上。起點或終點不存在時丟 `std::out_of_range`。一次只看一關，做完再往下讀。
+`V = head.size()` and `E = pipes.size()`, and both can exceed a million. Throw `std::out_of_range` if the start or the end doesn't exist.
 
-## Stage 1 — 不會改變的管線
+This is the original problem with clearings as junctions, elevation as water head, and the detonator as the valve. Stages 1 and 2 ask for the shortest length without and with the valve, and Stage 3 also asks for the route and where the valve fires.
 
-`shortest_drift(network, source, sink)`：這一關 `drops` 永遠是空的（閥門沒有作用）。回傳從 `source` 到 `sink` 的最短總長度，到不了回傳 `std::nullopt`；`source == sink` 時是 0。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-要 O(V + E)。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 閥門
+## Stage 1 — A pipeline that never changes
 
-`drops` 不再是空的。同樣回傳最短總長度：機器人可以在路上經過 `valve` 時決定要不要觸發。
+```cpp
+std::optional<std::int64_t> shortest_drift(const PipeNetwork& network, int source, int sink);
+```
 
-要 O(V + E)。
+`shortest_drift(network, source, sink)`: in this stage `drops` is always empty (the valve has no effect). Return the shortest total length from `source` to `sink`, or `std::nullopt` if `sink` can't be reached; the length is 0 when `source == sink`.
 
-## Stage 3 — 交出路線
+Must run in O(V + E).
 
-`plan_drift(network, source, sink)` 回傳 `DriftPlan`：
+## Stage 2 — The valve
+
+`drops` is no longer empty. Return the shortest total length as before: when the robot passes `valve` along the way, it can decide whether to fire it.
+
+Must run in O(V + E).
+
+## Stage 3 — Producing the route
+
+```cpp
+std::optional<DriftPlan> plan_drift(const PipeNetwork& network, int source, int sink);
+```
+
+`plan_drift(network, source, sink)` returns a `DriftPlan`:
 
 ```cpp
 struct DriftPlan {
@@ -58,10 +86,16 @@ struct DriftPlan {
 };
 ```
 
-`route[*trigger]` 必須是 `valve`。沒有路線時回傳 `std::nullopt`。最短路線不只一條時，回傳任一條都算對。
+`route[*trigger]` must be `valve`. If the shortest length can be reached without firing, leave `trigger` empty. Return `std::nullopt` if there is no route. When there is more than one shortest route, returning any of them is correct.
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼這題不需要 Dijkstra，也不需要 Bellman-Ford？你的演算法靠的是圖的什麼性質？
-2. 如果閥門可以觸發很多次，或者有好幾個不同的閥門，你的建模會怎麼變？複雜度呢？
-3. 為什麼不能把「觸發前」和「觸發後」的方向放在同一張圖上、靠權重來區分？
+Once you're done, answer without looking at your code:
+
+1. Why does this problem need neither Dijkstra nor Bellman-Ford? What property of the graph does your algorithm rely on?
+2. If the valve could fire many times, or there were several different valves, how would your model change? What about the complexity?
+3. Why can't you put the directions from before and after firing into one graph and tell them apart by weight?
+
+---
+
+**Official solution:** [Problem Set 6 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9073af3b8151002c5f63d06dc7ac961e_MIT6_006S20_ps6_solutions.pdf). Read it after you finish.

@@ -1,6 +1,6 @@
 ---
-title: Alternating Coin Game（兩人零和區間 DP）
-unit: 07 · Dynamic Programming I（PS7）
+title: Alternating Coin Game (two-player zero-sum interval DP)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 Lecture 16
 pdf: materials/6.006/lectures/lec16.pdf
 read: materials/6.006/lectures/lec16.pdf
@@ -10,19 +10,31 @@ minutes: 60
 
 # 0705 · Alternating Coin Game
 
-> **實務上為什麼會遇到**：minimax 是 AlphaZero 這類 self-play 系統的出發點，能共用的局面就是 transposition table。這題的局面只用「剩下的區間」就能描述，正好拿來練兩人博弈的 DP：對手也在做最好的決定，你的答案要對每種回應都站得住腳。
+**Based on:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf) · **Read first:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf)
 
-一排 `n` 枚硬幣，值 `v[0..n-1]`（可為負）。兩人輪流從**目前這一排的最前面或最後面**拿走一枚，直到拿完（輪到你就一定要拿）。雙方都想讓自己的總和最大。
+> **Why this comes up in practice:** minimax is the starting point of self-play systems like AlphaZero, and sharing positions that repeat is what a transposition table does. Here a position is described entirely by the remaining range, which makes this a good place to practice DP for two-player games: your opponent is also making the best decisions, so your answer has to hold up against every reply.
 
-一次只看一關，做完再往下讀。
+## Your task
 
-## Stage 1 — 先手能拿多少
+A row of `n` coins has values `v[0..n-1]` (possibly negative). Two players take turns removing one coin from **the front or the back of the current row** until none are left (on your turn, you must take a coin). Each player wants to maximize their own total.
 
-`std::int64_t coin_game_value(std::span<const int> coins)`：雙方都最佳時，先手的總和。O(n²) 時間。空輸入回傳 0。
+Lecture 16 computes the first player's best total. Here you also turn the table into a bot that can play the game, and then cut the memory down to O(n).
 
-貪心（每次拿兩端較大的）是錯的。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 2 — 可以上場對打的策略
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — How much the first player can get
+
+```cpp
+std::int64_t coin_game_value(std::span<const int> coins);
+```
+
+`std::int64_t coin_game_value(std::span<const int> coins)`: the first player's total when both players play optimally. O(n²) time. Return 0 for empty input.
+
+Greedy (always taking the larger end) is wrong.
+
+## Stage 2 — A strategy that can actually play
 
 ```cpp
 enum class Side { Front, Back };
@@ -35,14 +47,16 @@ public:
 };
 ```
 
-`best_move(first, last)`：目前剩下 `coins[first..last]`（包含兩端，`first <= last`）時，輪到的人應該拿哪一端才能達到最佳結果。測試會讓你的 bot 對上窮舉的所有對手走法：無論對手怎麼走，你的 bot 都要拿到至少 `value()`。
+`best_move(first, last)`: when `coins[first..last]` remain (both ends included, `first <= last`), the end the player to move should take to reach the best outcome. The tests pit your bot against every line of opponent play, enumerated exhaustively: whatever the opponent does, your bot must get at least `value()`.
 
-## Stage 3 — `coin_game_value` 降到 O(n) 記憶體
+## Stage 3 — Cut `coin_game_value` to O(n) memory
 
-依區間長度遞增計算時，只需要長度少一的那一層。Heap 高水位要在 O(n) 以內。把「雙方差值」當成子問題可以省掉 prefix sum，也更簡潔。
+When you compute by increasing range length, you only need the layer whose length is one less. The heap high-water mark must stay within O(n) (the tests allow at most 40 bytes per coin). Using the difference between the two players' totals as the subproblem removes the need for prefix sums and is also simpler.
 
-## 面試追問
+## Interview follow-ups
 
-1. 這題是零和，所以一個表就夠。什麼樣的計分規則會讓你必須多記「輪到誰」，甚至兩個人的分數？
-2. 長度 `n` 為偶數時，先手其實有個簡單的不敗策略（只算總分勝負）。為什麼它算不出「最多能拿多少」？
-3. 把 relation 改寫成差值後，答案怎麼從差值換回總和？整數除法會出問題嗎？
+Once you're done, answer without looking at your code:
+
+1. This game is zero-sum, so one table is enough. What kind of scoring rule would force you to also record whose turn it is, or even both players' scores?
+2. When the length `n` is even, the first player actually has a simple strategy that never loses (judging only by who has the larger total). Why can't it tell you the most the first player can take?
+3. Once the relation is rewritten in terms of the difference, how do you turn the answer from a difference back into a total? Can integer division cause trouble?

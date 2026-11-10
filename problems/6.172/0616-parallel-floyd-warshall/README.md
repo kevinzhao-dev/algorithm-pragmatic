@@ -1,7 +1,7 @@
 ---
-title: 平行 Floyd-Warshall 與遞移閉包
-unit: 06 · Work/Span 理論（HW5）
-source: 6.172 HW5 Write-up 6（CLRS 27.2-6）
+title: Parallel Floyd-Warshall and Transitive Closure
+unit: 06 · Work/Span Theory (HW5)
+source: 6.172 HW5 Write-up 6 (CLRS 27.2-6)
 pdf: materials/6.172/homework/hw05/handout.pdf
 read: materials/6.172/lectures/lec08.pdf
 kind: code
@@ -9,35 +9,72 @@ sanitizer: tsan
 minutes: 110
 ---
 
-# 0616 · 平行 Floyd-Warshall 與遞移閉包
+# 0616 · Parallel Floyd-Warshall and Transitive Closure
 
-> **實務上為什麼會遇到**：路徑規劃的全對全距離、模組相依的傳遞閉包（「改這個 header 要重編哪些檔案」）都是這個三層迴圈。難處不在分析，在於看出「哪些東西在這一輪不會被改」，那正是能平行的理由。
+**Original problem:** [HW5: Theory of Performance Engineering](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/cd57dbdecbce3bd4da39d620c1e61d14_MIT6_172F18hw5.pdf) · **Read first:** [Analysis of Multithreaded Algorithms](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/5655e50541f85421cc47b7c85d8e5de3_MIT6_172F18_lec8.pdf)
 
-沿用 `template <typename Exec>`（`_shared/01_exec.hpp`）：`exec::Meter` 算 work／span，`exec::ForkJoin` 由 TSan 把關。`dist` 是 `n×n` 的 row-major 陣列，沒有邊的格子是 `kNoEdge`，對角線是 0。
+> **Why this comes up in practice:** all-pairs distances in route planning and the transitive closure of module dependencies ("which files must be rebuilt if I change this header?") are both this triple loop. The hard part isn't the analysis; it's seeing "what won't change in this round," which is exactly what makes it parallelizable.
 
-## Stage 1 — 平行化三層迴圈
+## Original problem
 
-`floyd_warshall(exec, dist, n)`：就地算全對全最短距離。可能有負邊，但沒有負環；`kNoEdge` 參與的加法要跳過（別讓它溢位或變成「看起來可達」）。
+6.172 HW5 Write-up 6 is CLRS Exercise 27.2-6: give an efficient multithreaded implementation of the Floyd-Warshall algorithm (CLRS §25.2), which computes the shortest-path distances between all pairs of vertices in an edge-weighted directed graph, and analyze it. Floyd-Warshall runs one round per vertex k; in round k, every pair (i, j) takes the route through k whenever d[i][k] + d[k][j] is shorter than its current d[i][j]. HW5 is a written problem set, so the original asks for pseudocode and an analysis of the work, span, and parallelism, not a program.
 
-最外層 `k` 只能循序（第 `k` 輪要用第 `k-1` 輪的結果）。內兩層要用 `parallel_for`。關鍵觀察：第 `k` 輪時第 `k` 列和第 `k` 行**不會改變**（`d[k][k] = 0`），所以寫入 `d[i][j]` 時讀 `d[i][k]`、`d[k][j]` 是安全的——前提是你真的**不要去寫** `i == k` 或 `j == k` 的格子，否則 TSan 會當場抓到（就算寫回的值一樣，那依然是資料競爭）。
+## Your task
 
-計帳：每考慮一個 `i != k` 且 `j != k` 的 `(i, j)` 就 `exec.charge(1)`（不管是否更新），所以 work 恰好是 `n(n-1)²` 加上 fork 次數。Span 要求 `O(n lg n)`：不超過 `n·(2⌈lg n⌉ + 6)`。
+As before, use `template <typename Exec>` (`_shared/01_exec.hpp`): `exec::Meter` computes work/span, and with `exec::ForkJoin`, TSan guards against races. `dist` is an `n×n` row-major array; a cell with no edge holds `kNoEdge`, and the diagonal is 0.
 
-## Stage 2 — 路徑
+Beyond the parallel algorithm that the exercise asks for, you also keep next-hop pointers so that paths can be rebuilt, and you finish with a bitset transitive closure that has to be fast.
 
-`floyd_warshall_paths(exec, dist, next, n)`：`next` 同尺寸；呼叫時由 `dist` 自行初始化（有邊 `next[i][j] = j`，否則 `-1`；對角線 `-1`）。之後更新 `d[i][j]` 時順便把 `next[i][j]` 設為 `next[i][k]`，同樣不要寫 `i == k`、`j == k` 的格子。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `reconstruct_path(next, n, s, t)`：回傳 `s` 到 `t` 的頂點序列（含兩端），不可達回傳空，`s == t` 回傳 `{s}`。
-- `has_negative_cycle(dist, n)`：跑完 `floyd_warshall` 後呼叫，任一對角線為負就是有負環。
+## Stage 1 — Parallelizing the triple loop
 
-## Stage 3 — 實務延伸：位元集合遞移閉包
+```cpp
+inline constexpr std::int64_t kNoEdge = std::numeric_limits<std::int64_t>::max() / 4;
 
-`transitive_closure(exec, rows, n)`：`rows` 是 `n` 列的位元矩陣，每列 `words = (n + 63) / 64` 個 `uint64_t`，`rows[i * words + (j / 64)]` 的第 `j % 64` 位表示 `i → j`。把它改成遞移閉包（`i` 能經過至少一條邊走到 `j`）。第 `k` 輪只要把第 `k` 列 OR 到「第 `k` 位為 1 的其他列」，內層可平行（一樣不能動第 `k` 列）。
+template <typename Exec>
+void floyd_warshall(Exec& exec, std::span<std::int64_t> dist, std::size_t n);
+```
 
-用位元集合比逐格布林陣列快數十倍：測試要求比同一支執行檔裡的逐格 baseline 快至少 **10 倍**。
+`floyd_warshall(exec, dist, n)`: compute all-pairs shortest distances in place. There may be negative edges but no negative cycles; skip any addition that involves `kNoEdge` (don't let it overflow or turn into something that "looks reachable").
 
-## 面試追問
+The outermost loop over `k` must stay serial (round `k` uses the results of round `k-1`). The inner two loops must use `parallel_for`. The key observation: during round `k`, row `k` and column `k` **don't change** (`d[k][k] = 0`), so reading `d[i][k]` and `d[k][j]` while writing `d[i][j]` is safe, provided you really **don't write** the cells where `i == k` or `j == k`. Otherwise TSan catches it on the spot (even if the value written back is the same, it's still a data race).
 
-1. 寫出 Stage 1 的 work 與 span，並解釋為什麼 `k` 不能平行（HW5 Write-up 6）。若 `(i, j)` 內兩層改回循序，span 變成多少？
-2. 為什麼 Stage 1 提示的 `d[k][k] = 0` 那個性質是必要前提？有負環時會怎麼樣？
-3. 位元集合版的複雜度 `O(n³/w)` 裡的 `w` 代表什麼？什麼情況下輸入稀疏圖反而該改用 `n` 次 BFS？
+Accounting: `exec.charge(1)` for every `(i, j)` considered with `i != k` and `j != k` (whether or not it gets updated), so the work is exactly `n(n-1)²` plus the number of forks. The span must be `O(n lg n)`: at most `n·(2⌈lg n⌉ + 6)`.
+
+## Stage 2 — Paths
+
+```cpp
+template <typename Exec>
+void floyd_warshall_paths(Exec& exec, std::span<std::int64_t> dist, std::span<std::int64_t> next,
+                          std::size_t n);
+
+std::vector<std::size_t> reconstruct_path(std::span<const std::int64_t> next, std::size_t n,
+                                          std::size_t s, std::size_t t);
+
+bool has_negative_cycle(std::span<const std::int64_t> dist, std::size_t n);
+```
+
+`floyd_warshall_paths(exec, dist, next, n)`: `next` has the same size, and the function initializes it from `dist` itself (`next[i][j] = j` where there's an edge, `-1` otherwise; `-1` on the diagonal). Afterwards, whenever you update `d[i][j]`, also set `next[i][j]` to `next[i][k]`, and again don't write the cells where `i == k` or `j == k`.
+
+- `reconstruct_path(next, n, s, t)`: return the sequence of vertices from `s` to `t` (both ends included); return an empty sequence when `t` is unreachable, and `{s}` when `s == t`.
+- `has_negative_cycle(dist, n)`: call it after `floyd_warshall`; any negative diagonal entry means there's a negative cycle. (For this check the tests do run `floyd_warshall` on a graph that has a negative cycle.)
+
+## Stage 3 — Real-world extension: Bitset transitive closure
+
+```cpp
+template <typename Exec>
+void transitive_closure(Exec& exec, std::span<std::uint64_t> rows, std::size_t n);
+```
+
+`transitive_closure(exec, rows, n)`: `rows` is a bit matrix of `n` rows, each made of `words = (n + 63) / 64` `uint64_t` words, where bit `j % 64` of `rows[i * words + (j / 64)]` means `i → j`. Turn it into the transitive closure (`i` can reach `j` along at least one edge). In round `k`, you only need to OR row `k` into "every other row whose bit `k` is 1"; the inner loop can run in parallel (again, don't touch row `k`).
+
+Bitsets are tens of times faster than a cell-by-cell boolean array: the test requires at least a **10×** speedup over a cell-by-cell baseline in the same executable, measured with a single worker.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Give the work and span of Stage 1, and explain why `k` can't be parallel (HW5 Write-up 6). If the inner two `(i, j)` loops went back to being serial, what would the span become?
+2. Why is the `d[k][k] = 0` property from Stage 1 a necessary precondition? What happens when there's a negative cycle?
+3. In the bitset version's complexity `O(n³/w)`, what does `w` stand for? When should a sparse input graph use `n` runs of BFS instead?

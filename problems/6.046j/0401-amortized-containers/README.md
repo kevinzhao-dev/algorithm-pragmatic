@@ -1,6 +1,6 @@
 ---
-title: Table Doubling 與 Binary Counter（攤銷分析）
-unit: 04 · Amortization 與 Randomization（PS4）
+title: Table Doubling and Binary Counter (amortized analysis)
+unit: 04 · Amortization and Randomization (PS4)
 source: 6.046J Lecture 5
 pdf: materials/6.046j/lectures/lec05.pdf
 read: materials/6.046j/lectures/lec05.pdf
@@ -8,45 +8,93 @@ kind: code
 minutes: 120
 ---
 
-# 0401 · Table Doubling 與 Binary Counter
+# 0401 · Table Doubling and Binary Counter
 
-> **實務上為什麼會遇到**：`std::vector` 和 LSM-tree 的 compaction 背後都是攤銷分析。單次操作可以很貴，但只要設計得好，任何一段操作序列的總成本都是線性的；設計不好，就會在邊界上反覆觸發重配置。
+**Based on:** [Amortization: Amortized Analysis](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/13e2c7d165259712327af0af312a068e_MIT6_046JS15_lec05.pdf) · **Read first:** [Amortization: Amortized Analysis](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/13e2c7d165259712327af0af312a068e_MIT6_046JS15_lec05.pdf)
 
-## Stage 1 — 動態陣列
+> **Why this comes up in practice:** amortized analysis is behind both `std::vector` and LSM-tree compaction. A single operation can be expensive, but with a good design the total cost of any sequence of operations is linear; with a bad one, you keep triggering reallocations at a boundary.
 
-`DynamicArray<T>`：自己管理未初始化的原始記憶體，不可以用 `std::vector`。`T` 可能沒有 default constructor，所以不能先建好一堆元素再賦值。
+## Your task
 
-- `push_back(value)`：滿了就把 capacity 加倍（`0 → 1 → 2 → 4 ...`）。
-- `operator[]`（不檢查範圍）、`size()`、`capacity()`、`empty()`。
-- 複製建構深層複製；移動建構把記憶體交出去，來源變成 capacity 0 的空陣列。`operator=` 用傳值實作（copy-and-swap）。
+You build two containers from Lecture 5 whose costs only make sense amortized: a dynamic array that grows and shrinks by table doubling, and a log-structured index whose runs behave like a binary counter.
 
-**例外安全**：擴充時如果 `T` 的 move constructor 可能丟例外，要改用複製（`std::move_if_noexcept`）。複製失敗時，要清掉已建好的新元素、釋放新緩衝區，陣列完全回到原狀（strong guarantee）。複製建構也要處理複製到一半失敗。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-測試會用計數的元素類型確認每次 `push_back` 的攤銷搬動次數是常數，用 `Tracked` 抓洩漏和重複解構。
+## Stage 1 — Dynamic array
 
-## Stage 2 — 縮容與不抖動
+```cpp
+template <typename T>
+class DynamicArray {
+public:
+    DynamicArray();
+    DynamicArray(const DynamicArray& other);
+    DynamicArray(DynamicArray&& other);  // should be noexcept once implemented
+    DynamicArray& operator=(DynamicArray other);
+    ~DynamicArray();
 
-`pop_back()`：陣列為空時丟 `std::out_of_range`。
+    std::size_t size() const;
+    std::size_t capacity() const;
+    bool empty() const;
 
-刪除後若 `size ≤ capacity / 4`，把 capacity 砍半，這條規則讓每次重配置都停在半滿。特例是 `size` 變成 0 時直接釋放全部記憶體，capacity 回到 0。
+    T& operator[](std::size_t index);
+    const T& operator[](std::size_t index) const;
 
-`pop_back` **永遠不丟例外**：如果縮容時複製失敗，就留著舊的表，元素不受影響。
+    void push_back(T value);
+};
+```
 
-測試會在 resize 的臨界點反覆 pop/push：如果你用 `size ≤ capacity / 2` 就縮，每個操作都會變成 Θ(n)。
+`DynamicArray<T>`: manage uninitialized raw memory yourself; you must not use `std::vector`. `T` may have no default constructor and no assignment operators, so you can't construct a batch of elements first and assign to them later.
 
-## Stage 3 — 實務延伸：Log-structured Index
+- `push_back(value)`: when the array is full, double the capacity (`0 → 1 → 2 → 4 ...`).
+- `operator[]` (without bounds checking), `size()`, `capacity()`, `empty()`.
+- Copy construction makes a deep copy; move construction hands the memory over, and the source becomes an empty array with capacity 0. Implement `operator=` with a by-value parameter (copy-and-swap).
 
-`SortedRuns<T>`：把資料切成一組已排序的 run，大小都是 2 的冪次，且每種大小最多一個。
+**Exception safety:** when growing, if `T`'s move constructor may throw, copy instead (`std::move_if_noexcept`). If a copy fails, destroy the new elements already built, free the new buffer, and leave the array exactly as it was (the strong guarantee). The copy constructor must also handle a copy that fails halfway through.
 
-- `insert(v)`：放入大小 1 的新 run，出現兩個同大小的 run 就合併，一路進位，就像遞增一個二進位計數器。
-- `run_count()`：非空 run 的數量，一定等於 `size()` 的二進位 1 的個數。
-- `contains(v)`：對每個 run 做二分搜，比較次數 O(log² n)。
-- `sorted()`：回傳所有元素排序好的結果。允許重複。
+The tests use a counting element type to confirm that the amortized number of moves per `push_back` is constant, and `Tracked` to catch leaks and double destruction.
 
-**成本要求**：連續 `n` 次 `insert` 的總比較次數要是 `O(n log n)`（測試用 `Counted` 量）。
+## Stage 2 — Shrinking without thrashing
 
-## 面試追問
+```cpp
+// in class DynamicArray<T>
+void pop_back();
+```
 
-1. 用 potential method 分析 table doubling：`Φ` 要怎麼定義？縮容規則為什麼要用 `1/4` 而不是 `1/2`？
-2. `SortedRuns` 的 `insert` 就是 binary counter。如果同時支援 decrement，binary counter 的攤銷分析為什麼會壞掉？這對應到 LSM-tree 的哪個真實問題？
-3. Move constructor 沒有 `noexcept` 時，`std::vector` 擴充會發生什麼事？為什麼？
+`pop_back()`: throw `std::out_of_range` if the array is empty.
+
+If `size ≤ capacity / 4` after a removal, halve the capacity; this rule leaves the table half full after every reallocation. The special case: when `size` becomes 0, free all the memory and set the capacity back to 0.
+
+`pop_back` **never throws**: if a copy fails while shrinking, keep the old table, and the elements stay as they were.
+
+The tests pop and push repeatedly right at a resize threshold: if you shrink as soon as `size ≤ capacity / 2`, every operation becomes Θ(n).
+
+## Stage 3 — Real-world extension: a log-structured index
+
+```cpp
+template <typename T>
+class SortedRuns {
+public:
+    void insert(T value);
+    bool contains(const T& value) const;
+    std::size_t size() const;
+    std::size_t run_count() const;
+    std::vector<T> sorted() const;
+};
+```
+
+`SortedRuns<T>`: keep the data in a set of sorted runs whose sizes are all powers of 2, with at most one run of each size.
+
+- `insert(v)`: add a new run of size 1; whenever two runs of the same size appear, merge them, carrying all the way up, just like incrementing a binary counter.
+- `run_count()`: the number of non-empty runs, which always equals the number of 1 bits in `size()`.
+- `contains(v)`: binary-search each run, for O(log² n) comparisons.
+- `sorted()`: return all the elements in sorted order. Duplicates are allowed.
+
+**Cost requirement:** `n` consecutive calls to `insert` must make `O(n log n)` comparisons in total (the tests measure this with `Counted`).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Analyze table doubling with the potential method: how should you define `Φ`? Why does the shrinking rule use `1/4` rather than `1/2`?
+2. The `insert` of `SortedRuns` is exactly a binary counter. Why does the amortized analysis of a binary counter break down if it also supports decrement? Which real LSM-tree problem does that correspond to?
+3. What happens when `std::vector` grows if the move constructor is not `noexcept`? Why?

@@ -1,6 +1,6 @@
 ---
-title: Memo 與 Bowling（SRT BOT 線性 DP）
-unit: 07 · Dynamic Programming I（PS7）
+title: Memo and Bowling (SRT BOT linear DP)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 Lecture 15
 pdf: materials/6.006/lectures/lec15.pdf
 read: materials/6.006/lectures/lec15.pdf, materials/6.006/recitations/rec15.pdf
@@ -8,15 +8,35 @@ kind: code
 minutes: 75
 ---
 
-# 0701 · Memo 與 Bowling
+# 0701 · Memo and Bowling
 
-> **實務上為什麼會遇到**：把昂貴函式的結果快取起來，就是 DP 的 top-down 形式；「一維掃過去、每格只問一個局部問題」則是幾乎所有 DP 的原型。先用一個小題把 SRT BOT（Subproblem、Relate、Topological order、Base、Original、Time）完整走一遍，這個單元的每一題都是同一套。
+**Based on:** [Lecture 15: Dynamic Programming, Part 1: SRBOT, Fib, DAGs, Bowling notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9eb3e9a51a7b5b60b0f67c2277f8b0ee_MIT6_006S20_lec15.pdf) · **Read first:** [Lecture 15: Dynamic Programming, Part 1: SRBOT, Fib, DAGs, Bowling notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9eb3e9a51a7b5b60b0f67c2277f8b0ee_MIT6_006S20_lec15.pdf), [Recitation 15 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6022dc36557c5e5df2ad0a77e9463855_MIT6_006S20_r15.pdf)
 
-一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** caching the results of an expensive function is the top-down form of DP, and "sweep once along one dimension, asking only a local question at each cell" is the prototype of almost every DP. Start by walking a small problem through all of SRT BOT (Subproblem, Relate, Topological order, Base, Original, Time); every exercise in this unit follows the same recipe.
 
-## Stage 1 — 通用的 `Memo`
+## Your task
 
-`Memo<Key, Value, Hash>` 把遞迴關係式和快取拆開，呼叫端只寫 relation：
+You first build a reusable memo table, then apply SRT BOT to the bowling problem from Lecture 15: the best score, a plan that reaches it, and finally a streaming version that needs only O(1) memory.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — A generic `Memo`
+
+```cpp
+template <typename Key, typename Value, typename Hash = std::hash<Key>>
+class Memo {
+public:
+    // relation is called as relation(key, recurse); recurse(k) returns const Value&.
+    template <typename Relation>
+    const Value& get(const Key& key, Relation&& relation);
+
+    std::size_t size() const;
+};
+```
+
+`Memo<Key, Value, Hash>` separates the recurrence from the cache, so the caller writes only the relation:
 
 ```cpp
 Memo<int, std::int64_t> memo;
@@ -26,44 +46,59 @@ auto fib = [](int n, auto& recurse) -> std::int64_t {
 memo.get(90, fib);
 ```
 
-| 操作 | 行為 |
+| Operation | Behavior |
 | --- | --- |
-| `get(key, relation)` | 算過就回傳 `const Value&`；否則呼叫 `relation(key, recurse)`，存起來再回傳。`recurse(k)` 回傳另一個子問題的 `const Value&` |
-| `size()` | 已完成的子問題數量 |
+| `get(key, relation)` | If the key was already computed, return its `const Value&`; otherwise call `relation(key, recurse)`, store the result, and return it. `recurse(k)` returns another subproblem's `const Value&` |
+| `size()` | The number of finished subproblems |
 
-每個 key 最多計算一次，回傳的 reference 在 `Memo` 存活期間一直有效。邊界要做對：
+Each key is computed at most once, and a returned reference stays valid for as long as the `Memo` lives. Get these edge cases right:
 
-- **循環依賴**：`relation` 繞回正在計算的 key 時丟 `std::logic_error`。這正是 SRT BOT 的 T 不成立。
-- **例外安全**：`relation` 丟例外時往外傳。還在計算中的 key 不留痕跡，之後可以重試；已經完成的保留。
-- `recurse` 可能讓表 rehash，別握著會失效的 iterator。
+- **Cyclic dependencies:** when `relation` loops back to a key that is still being computed, throw `std::logic_error`. This is exactly the case where the T of SRT BOT fails.
+- **Exception safety:** when `relation` throws, let the exception propagate. Keys still being computed leave no trace and can be retried later; finished keys are kept.
+- `recurse` may make the table rehash, so don't hold on to an iterator that can be invalidated.
 
-## Stage 2 — Bowling 的最佳分數
+## Stage 2 — The best Bowling score
 
-有一排 `n` 個 pin，第 `i` 個的值是 `v[i]`（可為負）。每個 pin 最多處理一次，可以跳過、單獨打（得 `v[i]`），或和下一個一起打（得 `v[i]·v[i+1]`）。
+```cpp
+std::int64_t bowling_max_score(std::span<const int> pins);
+```
 
-`std::int64_t bowling_max_score(std::span<const int> pins)`：回傳最高總分，O(n) 時間。值的範圍 `|v| ≤ 10^6`，`n ≤ 2·10^6`。
+There is a row of `n` pins, and pin `i` has value `v[i]` (possibly negative). Each pin is handled at most once: you can skip it, hit it alone (scoring `v[i]`), or hit it together with the next pin (scoring `v[i]·v[i+1]`).
 
-自己先把 SRT BOT 六步寫下來，再動手。
+`std::int64_t bowling_max_score(std::span<const int> pins)`: return the highest total score, in O(n) time. Values satisfy `|v| ≤ 10^6`, and `n ≤ 2·10^6`.
 
-## Stage 3 — 還原做法
+Write down the six SRT BOT steps yourself before you start coding.
 
-`std::vector<Throw> bowling_plan(std::span<const int> pins)`：回傳一組達到最高分的打法，O(n) 時間。`Throw{first, last}` 的 `last == first`（單打）或 `last == first + 1`（一起打）。順序不拘，同分時任一組都可以。
+## Stage 3 — Recovering the plan
 
-## Stage 4 — 串流版，O(1) 記憶體
+```cpp
+struct Throw {
+    std::size_t first;
+    std::size_t last;  // first, or first + 1
+};
 
-Pin 一個一個到達，不能先看完全部：
+std::vector<Throw> bowling_plan(std::span<const int> pins);
+```
+
+`std::vector<Throw> bowling_plan(std::span<const int> pins)`: return a set of throws that reaches the highest score, in O(n) time. In `Throw{first, last}`, either `last == first` (one pin alone) or `last == first + 1` (two pins together). The order doesn't matter, and when several plans tie, any of them is fine.
+
+## Stage 4 — A streaming version with O(1) memory
+
+Pins arrive one at a time, and you can't look at all of them first:
 
 ```cpp
 class BowlingStream {
-    void push(int pin);         // O(1)，不配置 heap
-    std::int64_t best() const;  // 目前已到達的這些 pin 的最高分
+    void push(int pin);         // O(1), no heap allocation
+    std::int64_t best() const;  // the best score over the pins that have arrived so far
 };
 ```
 
-Stage 2 的 suffix 形式要先知道結尾，串流需要改成 prefix 形式。想清楚 relation 真正依賴幾個狀態。
+The suffix form from Stage 2 needs to know where the input ends, so the stream needs a prefix form instead. Think carefully about how many states the relation really depends on.
 
-## 面試追問
+## Interview follow-ups
 
-1. Top-down 與 bottom-up 各在什麼情況比較好？`n` 到百萬時 top-down 會先死在哪裡？
-2. 為什麼 Stage 4 能丟掉表，Stage 3 卻不行？如果要在串流上隨時回報「目前的打法」，最少要留多少資訊？
-3. 回傳 `const Value&` 而不是 `Value`，如果底層從 `unordered_map` 換成 `vector`，哪裡會壞？
+Once you're done, answer without looking at your code:
+
+1. When is top-down better, and when is bottom-up? When `n` reaches a million, what kills top-down first?
+2. Why can Stage 4 throw away the table while Stage 3 can't? If the stream had to report the current plan at any moment, what is the least information you would need to keep?
+3. `get` returns `const Value&` rather than `Value`. If the underlying storage changed from `unordered_map` to `vector`, what would break?

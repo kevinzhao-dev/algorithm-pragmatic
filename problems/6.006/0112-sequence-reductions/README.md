@@ -1,6 +1,6 @@
 ---
-title: 在 Sequence 介面上做批次操作
-unit: 01 · Sequences（PS1）
+title: Batch Operations on the Sequence Interface
+unit: 01 · Sequences (PS1)
 source: 6.006 PS1 Problem 1-2
 pdf: materials/6.006/psets/ps1/questions.pdf
 answer: materials/6.006/psets/ps1/solutions.pdf
@@ -9,42 +9,80 @@ kind: code
 minutes: 50
 ---
 
-# 0112 · Sequence 上的批次操作
+# 0112 · Batch Operations on a Sequence
 
-> **實務上為什麼會遇到**：許多資料結構（平衡樹版的 sequence、rope、collaborative editor 的文件模型）只提供 `insert_at` / `delete_at`，其他批次操作都要自己組出來，而且成本要跟「動多少東西」成正比，不能跟整個序列的長度成正比。
+**Original problem:** [Problem Set 1 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/dc56bd1995baf20cfcdd3fbabdd2dbc9_MIT6_006S20_ps1-questions.pdf) · **Read first:** [Lecture 2: Data Structures notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf)
 
-作業給定一個 Sequence，只有 `insert_at` 和 `delete_at` 可用，要你用這兩個操作組出區段反轉與區段搬移，每個操作成本 O(log n) 時總成本要 O(k log n)。這裡把「每次操作 O(log n)」換成**直接計算呼叫次數**：測試會傳入一個計數用的序列，你的函式只能呼叫它的這三個操作：
+> **Why this comes up in practice:** many data structures (a sequence built on a balanced tree, a rope, the document model of a collaborative editor) offer only `insert_at` / `delete_at`, so you have to assemble every other batch operation yourself, and its cost must be proportional to "how much you move," not to the length of the whole sequence.
+
+## Original problem
+
+6.006 PS1 Problem 1-2 hands you a data structure D that supports the Sequence operations `D.build(X)` in O(n) time, and `D.insert_at(i, x)` and `D.delete_at(i)` in O(log n) time each, where n is the number of items stored in D when the operation runs; `delete_at` returns the item it removes. Using only these lower-level operations, describe algorithms for two higher-level ones, each running in O(k log n) time:
+
+- (a) `reverse(D, i, k)`: flip the order of the k consecutive items that begin at index i, that is, indices i through i + k − 1.
+- (b) `move(D, i, k, j)`: take the k consecutive items that begin at index i and relocate them, keeping their order, so that they sit just before the item at index j. You may assume that i ≤ j < i + k does not hold.
+
+The answer is written; there is no code.
+
+## Your task
+
+The problem set gives you a Sequence on which only `insert_at` and `delete_at` are available, and asks you to build range reversal and range moves out of those two operations: when each operation costs O(log n), the total cost must be O(k log n). Here, "each operation costs O(log n)" is replaced by **counting the calls directly**: the tests pass in a counting sequence, and your functions may call only these three of its operations:
 
 ```cpp
 seq.size();
-seq.insert_at(i, std::move(item));   // 0 ≤ i ≤ seq.size()，在索引 i 之前插入
-auto item = seq.delete_at(i);        // 刪除並回傳，0 ≤ i < seq.size()
+seq.insert_at(i, std::move(item));   // 0 ≤ i ≤ seq.size(); inserts before index i
+auto item = seq.delete_at(i);        // deletes and returns it; 0 ≤ i < seq.size()
 ```
 
-所有函式都是 template（`Seq` 只保證有這三個操作），元素只保證能 move（`std::unique_ptr` 也要能用）。參數不合法時丟 `std::invalid_argument`，序列不變。
+Every function is a template (`Seq` is only guaranteed to have these three operations), and elements are only guaranteed to be movable (`std::unique_ptr` must work too). When the arguments are invalid, throw `std::invalid_argument` and leave the sequence unchanged.
+
+Stage 3 adds a range rotation built on `move_range`, which the original problem doesn't have.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — `reverse_range(seq, i, k)`
 
-把從索引 `i` 開始的連續 `k` 個元素反轉。
+```cpp
+template <typename Seq>
+void reverse_range(Seq& seq, std::size_t i, std::size_t k);
+```
 
-- 需要 `i + k ≤ seq.size()`。`k ≤ 1` 時什麼都不用做。
-- `insert_at` + `delete_at` 的**總呼叫次數 ≤ 2k**。
+Reverse the `k` consecutive elements that start at index `i`.
+
+- Requires `i + k ≤ seq.size()`. When `k ≤ 1`, there is nothing to do.
+- The **total number of `insert_at` + `delete_at` calls must be ≤ 2k**.
 
 ## Stage 2 — `move_range(seq, i, k, j)`
 
-把從索引 `i` 開始的 `k` 個元素，依原本順序搬到「目前索引 `j` 的元素」的前面。`j` 用**搬移前**的索引。
+```cpp
+template <typename Seq>
+void move_range(Seq& seq, std::size_t i, std::size_t k, std::size_t j);
+```
 
-- 需要 `i + k ≤ seq.size()`，`j ≤ seq.size()`（`j == seq.size()` 代表搬到最後），且 `j` 不能落在區段內部（`i ≤ j < i + k` 不成立）。`k == 0` 不做事。
-- 總呼叫次數 **≤ 2k**。難點是每次 delete 之後索引都會平移，要想清楚 `j` 在往左搬與往右搬時各該怎麼調整。
+Move the `k` elements that start at index `i`, in their original order, to just in front of "the element currently at index `j`." `j` is an index from **before the move**.
+
+- Requires `i + k ≤ seq.size()` and `j ≤ seq.size()` (`j == seq.size()` means moving to the end), and `j` must not fall inside the range (`i ≤ j < i + k` must be false). `k == 0` does nothing.
+- The total number of calls must be **≤ 2k**. The hard part is that the indices shift after every delete, so work out how `j` has to be adjusted when moving left and when moving right.
 
 ## Stage 3 — `rotate_left(seq, i, k, m)`
 
-把從 `i` 開始的 `k` 個元素往左旋轉 `m` 格（區段的前 `m` 個元素移到區段末尾，`0 ≤ m ≤ k`，否則丟 `std::invalid_argument`）。
+```cpp
+template <typename Seq>
+void rotate_left(Seq& seq, std::size_t i, std::size_t k, std::size_t m);
+```
 
-用 `move_range` 組出來，並且**挑便宜的方向**：總呼叫次數 ≤ 2·min(m, k − m)。
+Rotate the `k` elements that start at `i` left by `m` positions (the first `m` elements of the range move to the end of the range; `0 ≤ m ≤ k`, otherwise throw `std::invalid_argument`).
 
-## 面試追問
+Build it from `move_range`, and **pick the cheaper direction**: the total number of calls must be ≤ 2·min(m, k − m).
 
-1. 假設序列的 `insert_at`、`delete_at` 是 O(log n)（例如 AVL），為什麼 `reverse_range` 不用平衡樹的特殊操作就能做到 O(k log n)？如果 `k` 接近 `n`，有沒有更快的辦法？
-2. `move_range` 在 `j > i` 和 `j < i` 兩種情況，索引平移為什麼不同？用不變量（invariant）說明你的迴圈。
-3. 如果序列支援 O(log n) 的 split / concatenate（例如 treap），`move_range` 的成本可以怎麼改寫？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Suppose the sequence's `insert_at` and `delete_at` are O(log n) (an AVL tree, for example). Why can `reverse_range` reach O(k log n) without any special balanced-tree operations? If `k` is close to `n`, is there a faster way?
+2. Why do the index shifts in `move_range` differ between the `j > i` case and the `j < i` case? Explain your loop with an invariant.
+3. If the sequence supported O(log n) split / concatenate (a treap, for example), how could you rework `move_range`, and what would it cost?
+
+---
+
+**Official solution:** [Problem Set 1 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/10e4e3444c1bde4c662a47a8f14dadd3_MIT6_006S20_ps1-solutions.pdf). Read it after you finish.

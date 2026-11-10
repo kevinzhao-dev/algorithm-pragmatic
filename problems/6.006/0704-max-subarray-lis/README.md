@@ -1,6 +1,6 @@
 ---
-title: Max Subarray 與 LIS（受限子問題）
-unit: 07 · Dynamic Programming I（PS7）
+title: Max Subarray and LIS (constrained subproblems)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 Lecture 16, Recitation 16
 pdf: materials/6.006/lectures/lec16.pdf
 read: materials/6.006/lectures/lec16.pdf, materials/6.006/recitations/rec16.pdf
@@ -8,11 +8,19 @@ kind: code
 minutes: 90
 ---
 
-# 0704 · Max Subarray 與 LIS
+# 0704 · Max Subarray and LIS
 
-> **實務上為什麼會遇到**：Vue 3 重新排列列表時，用 LIS 找出哪些節點可以不動，只移動其他節點，DOM 操作最少。Max subarray 則是「哪一段時間窗的異常最嚴重」這種事後分析。兩題的關鍵一樣：光看 prefix 不夠，子問題要多綁一個條件「必須以第 k 個元素結尾」。
+**Based on:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf) · **Read first:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf), [Recitation 16 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/487dc976eabd0f9bcd6a3c385203ea27_MIT6_006S20_r16.pdf)
 
-一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** when Vue 3 reorders a list, it uses LIS to find the nodes that can stay put and moves only the others, so the DOM operations are minimal. Max subarray is the kind of after-the-fact analysis that asks which time window had the worst anomalies. Both problems share the same key idea: a prefix alone isn't enough, so the subproblem must carry one more condition, "must end at the k-th element".
+
+## Your task
+
+Recitation 16 solves max subarray sum and Lecture 16 solves the longest increasing subsequence, both in their basic forms. Here you also recover an LIS, bring it down to O(n log n) comparisons, and use it to reorder a list with as few moves as possible.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
 
 ## Stage 1 — Max Subarray
 
@@ -21,33 +29,45 @@ struct Subarray { std::int64_t sum; std::size_t first; std::size_t last; };  // 
 Subarray max_subarray(std::span<const std::int64_t> values);
 ```
 
-回傳總和最大的非空連續區段，O(n) 時間。空輸入丟 `std::invalid_argument`。全部為負時就是其中最大的單一元素。同分時回傳任一段即可。
+Return the non-empty contiguous range with the largest sum, in O(n) time. Throw `std::invalid_argument` for empty input. When every value is negative, the answer is the single largest element. When several ranges tie, return any of them.
 
-## Stage 2 — LIS 長度
+## Stage 2 — LIS length
 
-`lis_length(values)`：`values` 是 `std::ranges::random_access_range`，元素只需要 `operator<`，回傳**嚴格遞增**子序列的最長長度。相等的元素不算遞增。這一關 O(n²) 就夠了。
+```cpp
+template <std::ranges::random_access_range R>
+std::size_t lis_length(const R& values);
+```
 
-## Stage 3 — 還原一組 LIS
+`lis_length(values)`: `values` is a `std::ranges::random_access_range` whose elements need only `operator<`. Return the length of the longest **strictly increasing** subsequence. Equal elements don't count as increasing. O(n²) is enough for this stage.
 
-`std::vector<std::size_t> lis_indices(values)`：回傳一組最長嚴格遞增子序列的索引，由小到大。同長度時任一組都可以。
+## Stage 3 — Recovering one LIS
+
+```cpp
+template <std::ranges::random_access_range R>
+std::vector<std::size_t> lis_indices(const R& values);
+```
+
+`std::vector<std::size_t> lis_indices(values)`: return the indices of one longest strictly increasing subsequence, from smallest to largest. If several have the same length, any of them is fine.
 
 ## Stage 4 — O(n log n)
 
-`lis_length` 和 `lis_indices` 都要改成最多約 `n log₂ n` 次 `operator<`（測試用 `Counted` 計數，不靠時鐘）。
+Both `lis_length` and `lis_indices` must be changed to make at most about `n log₂ n` calls to `operator<` (the tests count them with `Counted`, not with a clock, and allow at most n·(⌊log₂ n⌋ + 3) comparisons).
 
-提示：維護「長度為 k 的遞增子序列，最小的結尾是什麼」，這張表是遞增的，所以可以二分搜尋。結尾只有一個數字不夠還原解，每個元素還要記下自己的前一個是誰。
+Hint: maintain "the smallest possible last element of an increasing subsequence of length k". This table is increasing, so you can binary search it. One last element per length isn't enough to recover a solution, so each element must also record which element comes before it.
 
-## Stage 5 — 實務延伸：最少移動的重新排列
+## Stage 5 — Real-world extension: reordering with the fewest moves
 
 ```cpp
 template <std::ranges::random_access_range R>
 std::vector<std::size_t> keep_in_place(const R& before, const R& after);
 ```
 
-`before` 和 `after` 是同一組不重複 key 的兩種排列，把 `before` 變成 `after` 的一次操作是「拿起一個元素、插到任意位置」。回傳 `after` 中**不需要移動**的元素索引（由小到大），數量要盡量多，於是移動次數 `n - keep` 最少。Key 需可雜湊。
+`before` and `after` are two orderings of the same set of distinct keys, and one operation in turning `before` into `after` is "pick up one element and insert it at any position". Return the indices in `after` of the elements that **don't need to move** (from smallest to largest), keeping as many as possible so that the number of moves, `n - keep`, is as small as possible. Keys must be hashable.
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼子問題「prefix 的 LIS 長度」做不出 recurrence？綁定「以 k 結尾」解決了什麼？
-2. Stage 4 的表**不是**一組 LIS 本身，為什麼長度卻是對的？
-3. Stage 5 的移動次數為什麼不可能比 `n - LIS` 更少？如果移動成本隨距離增加，還能用 LIS 嗎？
+Once you're done, answer without looking at your code:
+
+1. Why can't the subproblem "the LIS length of a prefix" give a recurrence? What does binding it to "ends at k" solve?
+2. The Stage 4 table is **not** an LIS itself, so why is its length still correct?
+3. Why can't Stage 5 get by with fewer than `n - LIS` moves? If the cost of a move grew with distance, could you still use LIS?

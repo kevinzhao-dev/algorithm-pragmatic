@@ -1,6 +1,6 @@
 ---
-title: 非同步網路（Max、BFS 校正、節點計數、Bellman-Ford）
-unit: 10 · Distributed Algorithms（PS10）
+title: Asynchronous Networks (max, BFS with corrections, node counting, Bellman-Ford)
+unit: 10 · Distributed Algorithms (PS10)
 source: 6.046J Lecture 20, Recitation 10
 pdf: materials/6.046j/lectures/lec20.pdf
 read: materials/6.046j/lectures/lec20.pdf, materials/6.046j/recitations/rec10.pdf
@@ -8,32 +8,99 @@ kind: code
 minutes: 130
 ---
 
-# 1002 · 非同步網路
+# 1002 · Asynchronous Networks
 
-> **實務上為什麼會遇到**：真實網路沒有 lockstep，訊息會亂序、封包會塞車。這題帶你看到：原本同步時好好的演算法，在非同步下會被迫「校正」，最壞情況訊息量爆炸成指數。
+**Based on:** [Asynchronous Distributed Algorithms: Shortest-paths Spanning Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/78a79d1a832dbae7274695d7bd33d044_MIT6_046JS15_lec20.pdf) · **Read first:** [Asynchronous Distributed Algorithms: Shortest-paths Spanning Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/78a79d1a832dbae7274695d7bd33d044_MIT6_046JS15_lec20.pdf), [More Distributed Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/2218648e1afd6e487e114d451aa54e2d_MIT6_046JS15_Recitation10.pdf)
 
-全部用 `netsim::AsyncNetwork` 執行：process 實作 `on_start(ctx)` 與 `on_message(port, msg, ctx)`，用 `ctx.send(port, m)` / `ctx.broadcast(m)` 發訊息。沒有回合，訊息何時到由測試給定的 delay 決定（FIFO 不變）。網路在所有 channel 清空時停止。
+> **Why this comes up in practice:** real networks have no lockstep: messages arrive out of order and packets get stuck in congestion. This exercise shows how algorithms that worked fine synchronously are forced to make "corrections" under asynchrony, and how in the worst case the message count blows up exponentially.
 
-一次只看一關。
+## Your task
+
+Everything runs on `netsim::AsyncNetwork`: a process implements `on_start(ctx)` and `on_message(port, msg, ctx)`, and sends messages with `ctx.send(port, m)` / `ctx.broadcast(m)`. There are no rounds; when a message arrives depends on the delays the tests choose (channels stay FIFO). The network stops when every channel is empty.
+
+You implement four asynchronous algorithms from Lecture 20 and Recitation 10 and see what asynchrony costs each of them.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
 
 ## Stage 1 — Max flooding
 
-`MaxFlood(long long value)`：每個 process 有初始值。開始時廣播自己的值；收到更大的值就更新並廣播。`value()` 回傳目前最大值。收斂後所有 process 的 `value()` 都是全域最大值，總訊息量 ≤ `2·E·n`。
+```cpp
+class MaxFlood {
+public:
+    using Message = long long;
+    explicit MaxFlood(long long value);
 
-## Stage 2 — 非同步 BFS（校正式）
+    void on_start(netsim::Context<Message>& ctx);
+    void on_message(int port, const Message& m, netsim::Context<Message>& ctx);
+    long long value() const;
+};
+```
 
-`AsyncBfs(bool is_root)`：維護 `distance()`（hop 距離，未知為 `kInf`）與 `parent_port()`。root 開始廣播 0；收到 `d` 且 `d+1` 比目前小就更新 parent、廣播新距離（這就是 asynchronous relaxation）。
+`MaxFlood(long long value)`: every process has an initial value. At the start, broadcast your value; whenever you receive a larger one, update and broadcast it. `value()` returns the current maximum. After convergence, every process's `value()` is the global maximum, and the total number of messages is ≤ `2·E·n`.
 
-## Stage 3 — 節點計數（convergecast）
+## Stage 2 — Asynchronous BFS (with corrections)
 
-`CountingTree(bool is_root)`：在任意 spanning tree 上算出節點總數（不要求 BFS）。`root_count()` 在 root 上回傳 `n`（完成前回傳 -1）。訊息量 ≤ `4E + n`，要用 parent/nonparent 回應與 done 計數的 convergecast。收到 search 時回覆是否接受；收齊所有回應（知道誰是 child）和所有 child 的 done(k) 之後，往 parent 回報子樹大小。
+```cpp
+inline constexpr long long kInf = std::numeric_limits<long long>::max() / 4;
 
-## Stage 4 — 非同步 Bellman-Ford 與它的代價
+class AsyncBfs {
+public:
+    using Message = long long;
+    explicit AsyncBfs(bool is_root);
 
-`AsyncBellmanFord(bool is_root, std::vector<long long> port_weights)`：`distance()`、`parent_port()`。每次 dist 改善就在**所有** port 廣播新值（與講義相同）。正權重下最終收斂到正確答案，不論訊息怎麼排程。
+    void on_start(netsim::Context<Message>& ctx);
+    void on_message(int port, const Message& m, netsim::Context<Message>& ctx);
+    long long distance() const;
+    int parent_port() const;
+};
+```
 
-## 面試追問
+`AsyncBfs(bool is_root)`: maintain `distance()` (the hop distance, `kInf` while unknown) and `parent_port()` (-1 for the root). The root starts by broadcasting 0. When a process receives `d` and `d+1` is smaller than its current distance, it updates its parent and broadcasts the new distance (this is asynchronous relaxation). Relax only on a strict improvement: the tests require at most 2E messages under unit delays (on a 24-node ring), and strictly more when skewed delays force corrections.
 
-1. 非同步 BFS 為什麼最終收斂、但中途的 `parent` 可能很糟？時間上界 `O(diam·n·d)` 的 `n` 從哪來？
-2. Stage 4 的指數下界圖長什麼樣？想想每一段如何用「二進位倒數」製造 2^k 個訊息塞在 channel 裡。
-3. 想消除校正有什麼實際做法？（PS10-2 的 layered wave、或 synchronizer）代價是什麼？
+## Stage 3 — Counting nodes (convergecast)
+
+```cpp
+class CountingTree {
+public:
+    struct Message {
+        int kind = 0;
+        long long value = 0;
+    };
+    explicit CountingTree(bool is_root);
+
+    void on_start(netsim::Context<Message>& ctx);
+    void on_message(int port, const Message& m, netsim::Context<Message>& ctx);
+    long long root_count() const;
+};
+```
+
+`CountingTree(bool is_root)`: count the total number of nodes over any spanning tree (it doesn't have to be BFS). On the root, `root_count()` returns `n` (and -1 until it is done). The message count must be ≤ `4E + n`, which takes a convergecast with parent/nonparent replies and done counts. A process that receives a search replies whether it accepts. Once it has collected every reply (so it knows which neighbors are its children) and a done(k) from every child, it reports its subtree size to its parent. A root with no neighbors must still end with `root_count()` equal to 1; since no message will ever arrive, set it in `on_start`.
+
+## Stage 4 — Asynchronous Bellman-Ford and its cost
+
+```cpp
+class AsyncBellmanFord {
+public:
+    using Message = long long;
+    AsyncBellmanFord(bool is_root, std::vector<long long> port_weights);
+
+    void on_start(netsim::Context<Message>& ctx);
+    void on_message(int port, const Message& m, netsim::Context<Message>& ctx);
+    long long distance() const;
+    int parent_port() const;
+};
+```
+
+`AsyncBellmanFord(bool is_root, std::vector<long long> port_weights)`, with `distance()` and `parent_port()`. Every time dist improves, broadcast the new value on **all** ports (as in the lecture notes). As in Stage 2, the root starts by broadcasting 0 in `on_start`. With nonnegative weights (the tests include weight-0 edges) it eventually converges to the correct answer, however the messages are scheduled.
+
+The tests also count messages on the lecture's exponential gadget, a chain of k segments that each have two parallel edges, of weight 2^(k−1−i) and 0. Under an adversarial schedule, the k = 14 run must send at least 2^14 messages and at least 200 times as many as the k = 4 run; when the good links are delivered first, it must send at most 4E. So relay every strict improvement at once on every port, and send nothing else.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does asynchronous BFS eventually converge, even though `parent` can be very bad along the way? Where does the `n` in the time bound `O(diam·n·d)` come from?
+2. What does the exponential lower-bound graph for Stage 4 look like? Think about how each segment uses a "binary countdown" to pile 2^k messages into a channel.
+3. What practical ways are there to eliminate corrections? (The layered wave of PS10-2, or a synchronizer.) What do they cost?

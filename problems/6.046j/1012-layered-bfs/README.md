@@ -1,6 +1,6 @@
 ---
-title: 非同步網路上的 Layered BFS（不做 correction）
-unit: 10 · Distributed Algorithms（PS10）
+title: Layered BFS on an Asynchronous Network (no corrections)
+unit: 10 · Distributed Algorithms (PS10)
 source: 6.046J PS10 Problem 10-2
 pdf: materials/6.046j/psets/ps10/questions.pdf
 answer: materials/6.046j/psets/ps10/solutions.pdf
@@ -11,41 +11,62 @@ minutes: 150
 
 # 1012 · Layered BFS
 
-> **實務上為什麼會遇到**：路由協定的 BFS 樹、資料中心的 fabric 建樹，一旦節點「輸出」了 parent，就很難收回。1002 的 relaxation 版本要不斷校正；這題用 layered wave 換掉 correction，訊息與時間的上界都比較乾淨。
+**Original problem:** [Problem Set 10](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d4865809813b7de690cbdebb0bf8b4f4_MIT6_046JS15_pset10.pdf) · **Read first:** [Asynchronous Distributed Algorithms: Shortest-paths Spanning Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/78a79d1a832dbae7274695d7bd33d044_MIT6_046JS15_lec20.pdf)
 
-用 `netsim::AsyncNetwork`，訊息延遲任意（但 FIFO），延遲上限為 `d`。圖是連通無向圖，至少兩個節點，root 是 `v0`（透過建構子得知），不知道 n 或 diam。
+> **Why this comes up in practice:** in the BFS trees of routing protocols and in tree building for data center fabrics, once a node has "output" its parent, that is hard to take back. The relaxation version in 1002 keeps making corrections; this exercise replaces corrections with layered waves, which also gives cleaner bounds on messages and time.
+
+## Original problem
+
+6.046J PS10 Problem 10-2 improves on the asynchronous BFS algorithm from lecture. That algorithm makes corrections, and each correction can trigger many messages: until every node's parent variable has settled on a correct parent in a breadth-first spanning tree, it may send O(nE) messages and take O(diam·n·d) time in the worst case. (These bounds ignore the processes' parent outputs, global termination, and local processing time.) The goal is an asynchronous BFS that never makes a correction, so a process can output its parent as soon as it sets it, because that choice is final. The network graph is connected and has at least two nodes.
+
+- (a) Describe, in words and in detail, an algorithm where the root v0 directs the construction of the tree one level at a time; all parent variables must be set within O(diam²·d) time. The hint: build each new level with a broadcast-convergecast wave from the root. Four kinds of message should do, such as search (probing for new nodes), parent(b) with a Boolean b (the parent/nonparent reply), and ready and done (the broadcast and convergecast signals along the tree).
+- (b) Analyze the algorithm's running time and message count, and compare them with the cost of the asynchronous BFS from lecture.
+
+## Your task
+
+Use `netsim::AsyncNetwork`. Message delays are arbitrary (but FIFO), with an upper bound of `d`. The graph is connected and undirected with at least two nodes, and the root is `v0` (a process learns whether it is the root through its constructor); n and diam are unknown.
 
 ```cpp
 class LayeredBfs {
 public:
-    struct Message { ... };   // 自行定義，四種訊息（search、parent、ready、done）就夠
+    struct Message { ... };   // define it yourself; four message types (search, parent, ready, done) are enough
     explicit LayeredBfs(bool is_root);
     void on_start(netsim::Context<Message>& ctx);
     void on_message(int port, const Message& m, netsim::Context<Message>& ctx);
 
-    bool root_done() const;     // root 專用：整個 BFS 已結束
-    int parent_port() const;    // 非 root 的 parent port；root 為 -1
-    int level() const;          // BFS 深度，root 為 0
+    bool root_done() const;     // root only: the whole BFS has finished
+    int parent_port() const;    // parent port of a non-root node; -1 for the root
+    int level() const;          // BFS depth; 0 for the root
 };
 ```
 
-## 規格
+You implement the algorithm of part (a) as one process class, and the tests check bounds of the kind that part (b) asks you to derive.
 
-每個 phase，root 用 `ready` broadcast 沿著目前的 BFS 樹把訊號送到目前的 frontier，frontier 節點向所有鄰居送 `search`，收齊回覆（`parent(true)`/`parent(false)`）後 convergecast `done(bit)` 回 root，`bit` 表示這一輪有沒有產生新節點。root 收齊所有 `done` 後：有新節點就開始下一個 phase，否則結束。
+Write your code in `solution.hpp`. Since this exercise has no stages, the block above shows the whole interface instead of each stage listing the declarations it adds.
 
-- 一旦節點決定了 parent，就用 `ctx.output(parent_port)` 輸出，**一生只輸出一次**、之後不得改變（root 不用輸出）。這就是題目要的「不做 correction」。
-- `level()` 必須等於到 root 的 hop 距離。
+## Specification
 
-## 複雜度要求
+In each phase, the root broadcasts `ready` along the current BFS tree to carry the signal out to the current frontier. Frontier nodes send `search` to all their neighbors, and after collecting every reply (`parent(true)`/`parent(false)`), they convergecast `done(bit)` back to the root, where `bit` says whether this round produced any new nodes. Once the root has collected every `done`, it starts the next phase if there are new nodes, and finishes otherwise.
 
-令 `E` 為邊數、`diam` 為圖的直徑。測試會確認：
+- As soon as a node has decided its parent, it outputs it with `ctx.output(parent_port)`, **exactly once in its lifetime**, and must never change it afterwards (the root doesn't output). This is the "no corrections" that the problem asks for.
+- `level()` must equal the hop distance to the root.
 
-- 訊息總數 ≤ `4E + 2·n·(diam + 2)`。
-- 延遲上限 `d` 時，完成時間 ≤ `3·d·(diam + 3)²`。
-- 在各種 delay policy（unit、隨機、FIFO 下的 adversarial skew）下，`root_done()` 最終成立、每個節點恰好輸出一次 parent，且 `level` 正確。
+## Complexity requirements
 
-## 面試追問
+Let `E` be the number of edges and `diam` the diameter of the graph. The tests confirm that:
 
-1. Layered BFS 為什麼每個 phase 要花 O(diam·d)、總共 O(diam²·d)？訊息量又為什麼是 O(E + n·diam)？
-2. 和 1002 的 relaxation BFS 相比，時間與訊息各賺賠什麼？什麼情況下 layered 更慢？
-3. 為什麼每條 tree edge 每個 phase 最多走兩次 ready/done？如果把 phase 改成一次多層，能快多少？（synchronizer 的想法）
+- The total number of messages is ≤ `4E + 2·n·(diam + 2)`.
+- With delays bounded by `d`, the completion time is ≤ `3·d·(diam + 3)²`.
+- Under every delay policy (unit, random, and adversarial skew within FIFO), `root_done()` eventually holds, every node outputs its parent exactly once, and `level` is correct.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does each phase of layered BFS take O(diam·d), for O(diam²·d) in total? And why is the message count O(E + n·diam)?
+2. Compared with the relaxation BFS in 1002, what do you gain and what do you lose in time and in messages? When is the layered version slower?
+3. Why does each tree edge carry at most two ready/done messages per phase? If one phase covered several levels at once, how much faster could it be? (The idea behind a synchronizer.)
+
+---
+
+**Official solution:** [Solutions to Problem Set 10](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/7a3fe48c42ff8d2f7052e9fcf5054ae6_MIT6_046JS15_pset10sols.pdf). Read it after you finish.

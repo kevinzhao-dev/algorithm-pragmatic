@@ -1,6 +1,6 @@
 ---
-title: Bellman-Ford（負環偵測與回報）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: Bellman-Ford (detecting and reporting negative cycles)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 Lecture 12, Recitation 12
 pdf: materials/6.006/lectures/lec12.pdf
 read: materials/6.006/recitations/rec12.pdf
@@ -10,9 +10,13 @@ minutes: 110
 
 # 0602 · Bellman-Ford
 
-> **實務上為什麼會遇到**：路由協定（distance-vector）的收斂、匯率套利的偵測、限制式系統（system of difference constraints）的求解，骨架都是 Bellman-Ford。現實資料帶著負權重時，Dijkstra 根本不能用。
+**Based on:** [Lecture 12: Bellman-Ford notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/2430d7903a5529451d80c17f89a41fe8_MIT6_006S20_lec12.pdf) · **Read first:** [Recitation 12 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1a34924a2ee4e08c580c2268f8e854ee_MIT6_006S20_r12.pdf)
 
-輸入是邊的清單。頂點編號 `0 … n-1`，權重可以是負的。起點不存在時丟 `std::out_of_range`。一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** the convergence of (distance-vector) routing protocols, detecting currency arbitrage, and solving a system of difference constraints all have Bellman-Ford at their core. When real data comes with negative weights, Dijkstra simply can't be used.
+
+## Your task
+
+The input is a list of edges. Vertices are numbered `0 … n-1`, and weights may be negative. Throw `std::out_of_range` when the source doesn't exist.
 
 ```cpp
 struct Edge { int from; int to; std::int64_t weight; };
@@ -20,40 +24,61 @@ inline constexpr std::int64_t kUnreachable = std::numeric_limits<std::int64_t>::
 inline constexpr std::int64_t kNegativeInfinity = std::numeric_limits<std::int64_t>::min();
 ```
 
-## Stage 1 — 最短距離
+You implement Bellman-Ford, extend it to mark every vertex that a negative cycle can reach, extract a negative cycle, and then use it to find currency arbitrage.
 
-`bellman_ford(n, edges, s)`：回傳 `dist`，到不了的頂點是 `kUnreachable`。這一關保證從 `s` 可達的範圍內沒有負環。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-要 O(V · E)，但在邊的順序很糟、圖又很長時也要撐得住。圖可能有平行邊和 self-loop（權重非負的 self-loop 不算負環）。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 負環影響的範圍
+## Stage 1 — Shortest distances
 
-拿掉上一關的保證：現在從 `s` 可達的範圍內可能有負環。`bellman_ford(n, edges, s)` 要改成：
+```cpp
+std::vector<std::int64_t> bellman_ford(int n, std::span<const Edge> edges, int source);
+```
 
-- 只要 `v` 可以經過某個負環走到（`s` 走得到那個負環，那個負環走得到 `v`），`dist[v] = kNegativeInfinity`。
-- 其他頂點的 `dist` 維持正確的有限值或 `kUnreachable`。
+`bellman_ford(n, edges, s)`: return `dist`, with `kUnreachable` for unreachable vertices. In this stage, no negative cycle is reachable from `s`.
 
-從 `s` 走不到的負環不影響答案。
+Must run in O(V · E), and must hold up even when the edges come in a terrible order and the graph is very long. The graph may have parallel edges and self-loops (a self-loop with a nonnegative weight is not a negative cycle).
 
-## Stage 3 — 把負環交出來
+## Stage 2 — How far a negative cycle reaches
 
-`find_negative_cycle(n, edges, s)`：回傳一個從 `s` 可達的負環（頂點序列，不重複，相鄰兩個加上最後接回第一個都有邊，總權重 < 0，平行邊取最輕的），沒有就回傳 `std::nullopt`。
+Drop the previous stage's guarantee: negative cycles may now be reachable from `s`. Change `bellman_ford(n, edges, s)` so that:
 
-要 O(V · E)。
+- Whenever `v` can be reached through some negative cycle (`s` can reach that cycle, and the cycle can reach `v`), `dist[v] = kNegativeInfinity`.
+- Every other vertex keeps its correct finite `dist`, or `kUnreachable`.
 
-## Stage 4 — 實務延伸：匯率套利
+A negative cycle that `s` can't reach doesn't affect the answer.
+
+## Stage 3 — Producing the negative cycle
+
+```cpp
+std::optional<std::vector<int>> find_negative_cycle(int n, std::span<const Edge> edges,
+                                                    int source);
+```
+
+`find_negative_cycle(n, edges, s)`: return a negative cycle reachable from `s`, or `std::nullopt` if there is none. The cycle is a sequence of distinct vertices with an edge between every two adjacent ones and from the last back to the first, and its total weight is < 0, taking the lightest of any parallel edges.
+
+Must run in O(V · E).
+
+## Stage 4 — Real-world extension: currency arbitrage
 
 ```cpp
 struct Quote { int from; int to; double rate; };  // 1 unit of from buys `rate` units of to
 ```
 
-`find_arbitrage(currencies, quotes)`：找一串貨幣，沿著 `quotes` 換一圈後資產會變多（匯率乘積 > 1）。回傳貨幣序列（不重複，換匯方向是依序、最後接回第一個），沒有套利機會回傳 `std::nullopt`。`rate <= 0` 丟 `std::invalid_argument`。
+```cpp
+std::optional<std::vector<int>> find_arbitrage(int currencies, std::span<const Quote> quotes);
+```
 
-- 市場不一定連通，機會可能藏在任何角落。
-- 匯率都是浮點數，有些報價表「理論上乘起來剛好等於 1」，不可以因為捨入誤差就回報假的機會；乘積超過 1 + 1e-6 的機會則必須回報。兩者之間的情況不測試。
+`find_arbitrage(currencies, quotes)`: find a sequence of currencies such that exchanging once around the loop along `quotes` leaves you with more than you started with (the product of the rates is > 1). Return the sequence of currencies (distinct, exchanged in order, with the last one converting back to the first), or `std::nullopt` if there is no arbitrage opportunity. Throw `std::invalid_argument` if a quote has `rate <= 0`.
 
-## 面試追問
+- The market isn't necessarily connected, and an opportunity can hide in any corner.
+- Rates are floating-point numbers. Some quote tables multiply to exactly 1 in theory, and you must not report a false opportunity because of rounding error; an opportunity whose product exceeds 1 + 1e-6 must be reported. Cases in between are not tested.
 
-1. Bellman-Ford 為什麼 V - 1 輪就夠？這跟「最短路徑是 simple path」有什麼關係？
-2. 為什麼負環上的頂點不一定是第 V 輪被更新的頂點？
-3. 如果要的是「最賺的套利」而不只是「有套利」，這題還能用 Bellman-Ford 解嗎？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why are V - 1 rounds enough for Bellman-Ford? How does that relate to shortest paths being simple paths?
+2. Why isn't a vertex that gets updated in round V necessarily on the negative cycle?
+3. If you wanted the most profitable arbitrage rather than just any arbitrage, could you still solve this with Bellman-Ford?

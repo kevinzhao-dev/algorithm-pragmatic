@@ -1,118 +1,141 @@
 # algorithm-pragmatic
 
-把 MIT 三門課的作業變成一條可以依序走完的 C++ 練功路線，目標是 frontier lab 那種「把程式寫對、一輪一輪擴充、測試和 debug」的 coding interview。
+A C++ training path that turns the assignments of three MIT courses into exercises you work through in order. It targets the kind of coding interview frontier labs run: get the code right, extend it round after round, then test and debug it.
 
-這是個人整理的非官方改編，與 MIT 無關。授權與出處見[文末](#授權與出處)。
+This is an unofficial adaptation made for personal study, and it is not affiliated with MIT. See [License and attribution](#license-and-attribution) at the end.
 
-| 順序 | 課程 | 練什麼 | 份量 |
+| Order | Course | What you practice | Size |
 | --- | --- | --- | --- |
-| 1 | MIT 6.006 Introduction to Algorithms（Spring 2020） | 資料結構、排序、圖、動態規劃 | 80 題，約 100 小時 |
-| 2 | MIT 6.046J Design and Analysis of Algorithms（Spring 2015） | 進階設計與分析 | 50 題，約 105 小時 |
-| 3 | MIT 6.172 Performance Engineering（Fall 2018） | 量測、快取、平行化、allocator | 50 題，約 117 小時 |
+| 1 | MIT 6.006 Introduction to Algorithms (Spring 2020) | Data structures, sorting, graphs, dynamic programming | 80 exercises, about 102 hours |
+| 2 | MIT 6.046J Design and Analysis of Algorithms (Spring 2015) | Advanced algorithm design and analysis | 50 exercises, about 106 hours |
+| 3 | MIT 6.172 Performance Engineering (Fall 2018) | Measurement, caches, parallelism, allocators | 50 exercises, about 118 hours |
 
-每個單元先做「核心實作」（把講義教的資料結構親手寫一次），再做該單元的每一道官方作業題。後面的題目常會沿用你前面寫好的程式，例如 AVL tree 寫完之後，排行榜和文字緩衝區都建在它上面。
+Each unit starts with core implementations, where you write the data structures from the lecture notes yourself. Then come all of that unit's official assignment problems. Later exercises often reuse code you wrote earlier: once your AVL tree works, the leaderboard and the text buffer are built on top of it.
 
-6.172 的官方先修不包含 6.046J，走完 6.006 就可以開始，兩門課也能交錯做。完整題目清單在 [ROADMAP.md](ROADMAP.md)。
+6.172 doesn't officially require 6.046J, so you can start it right after 6.006, or interleave the two. The full list of exercises is in [ROADMAP.md](ROADMAP.md).
 
-## 開始練習
+## Getting started
 
-需要 Apple clang（或其他支援 C++20 的 clang）、CMake 和 Ninja。
+You need Apple clang (or another clang with C++20 support), CMake and Ninja.
 
 ```bash
 ./practice next
 ```
 
-它會告訴你下一題是什麼、做之前該讀哪份講義、題目在哪裡。打開該題的 `solution.hpp` 實作，然後：
+It tells you which exercise is next, which lecture notes to read first, and where the exercise lives. Implement it in that exercise's `solution.hpp`, then run:
 
 ```bash
 ./practice test 0114
 ```
 
-`0114` 是題目編號，也可以寫 slug 的片段，例如 `doubly`。
+`0114` is the exercise number. A fragment of the slug works too, such as `doubly`.
 
-只想走某一門課：
+To follow a single course:
 
 ```bash
 ./practice next --course 6.172
 ```
 
-## 關卡制
+## Stages
 
-每題的 `README.md` 分成幾個 stage，需求一關一關來，就像面試官在你寫完之後才加新需求。
+Each exercise's `README.md` is split into stages. The requirements arrive one stage at a time, the way an interviewer adds new requirements after you finish.
 
-- 前面的測試會一直跑。後面的需求弄壞前面的功能，馬上就會知道。
-- 功能測試跑在 AddressSanitizer + UBSan 下，記憶體錯誤不會被放過。
-- 複雜度要求由 Release 建置的效能測試把關，寫成 O(n²) 會逾時。
-- 每題最後的「面試追問」要能不看程式回答。
+- Earlier tests keep running, so you find out right away when a new requirement breaks an old feature.
+- Functional tests run under AddressSanitizer and UBSan, so memory errors don't slip through.
+- Performance tests in a Release build enforce the complexity requirements; an O(n²) solution times out.
+- Each exercise ends with interview follow-ups, which you should be able to answer without looking at your code.
+
+Every README links to its MIT source on OCW. Assignment problems also restate the original problem in full, and each stage lists the exact C++ declarations it asks for, so you never need the PDF to get started.
 
 ```
-6.006/0114-doubly-linked-list — Doubly Linked List（O(1) 區段搬移）
+6.006/0114-doubly-linked-list — Doubly Linked List (O(1) range moves)
 
   stage 1  ✓ 10/10
   stage 2  ✗ 2/6  ← 目前關卡
   stage 3  · 尚未解鎖
 ```
 
-題型有四種：`code`（實作）、`perf`（比倍數的效能工程）、`project`（多階段大題），以及 `paper`（純證明或分析，寫完對照解答後用 `./practice done <編號>` 標記）。
+There are four kinds of exercises:
 
-## 怎麼練才像面試
+- `code`: implementation.
+- `perf`: performance engineering, measured as a speedup.
+- `project`: a large exercise with many stages.
+- `paper`: a pure proof or analysis. Once you've written your answer and compared it with the official solution, mark it done with `./practice done <number>`.
 
-- 一次只讀一關，做完再往下看。
-- 模擬 live coding 時關掉 AI 補全，用 README 的 `minutes` 計時，先講清楚需求和資料結構再動手。
-- 卡住時先對照講義；`solutions/` 是參考解，**會直接爆雷**，把面試追問答完再看。
-- 想練 agentic coding：自己先寫驗收條件，再讓 agent 實作，然後審它的 diff、補測試，最後自己說得出每個關鍵決策。
+## Practicing like it's an interview
 
-## 目錄
+- Read one stage at a time, and finish it before reading on.
+- To simulate live coding, turn off AI completion and time yourself against the README's `minutes`. Explain the requirements and your data structures before you start writing code.
+- When you're stuck, go back to the lecture notes first. `solutions/` holds the reference solutions and **gives everything away**, so answer the interview follow-ups before you look.
+- To practice agentic coding, write the acceptance criteria yourself and let an agent implement them. Then review its diff and add tests. Make sure you can explain every key decision yourself.
 
-| 路徑 | 內容 |
+## Layout
+
+| Path | Contents |
 | --- | --- |
-| `problems/` | 題目、骨架、測試，依課程和編號排序 |
-| `problems/<課程>/_shared/` | 測試共用的輔助程式。標了 `SPOILER` 的檔案是某題的解答，題目 README 會提醒 |
-| `solutions/` | 參考解（爆雷） |
-| `materials/` | MIT 的講義、投影片、作業 PDF 和程式包 |
-| `harness/` | 測試框架，以及取代 Cilk 的 fork-join runtime |
-| `docs/AUTHORING.md` | 出題規格，想自己加題目時看這份 |
-| `progress.json` | 你的進度，由 `./practice` 自動更新 |
+| `problems/` | Exercises, skeletons and tests, by course and number |
+| `problems/<course>/_shared/` | Helpers shared by the tests. Files marked `SPOILER` contain the solution to an exercise, and that exercise's README warns you |
+| `solutions/` | Reference solutions (spoilers) |
+| `materials/` | MIT's lecture notes, slides, assignment PDFs and code bundles |
+| `harness/` | The test framework, plus the fork-join runtime that replaces Cilk |
+| `docs/AUTHORING.md` | The exercise format, for adding exercises yourself |
+| `progress.json` | Your progress, updated automatically by `./practice` |
 
-編號 `UUNN`：`UU` 是單元；`NN` 的 `01`–`09` 是核心實作，`11`–`19` 是作業題（個位數對應題號），`21` 起是延伸。
+Exercise numbers have the form `UUNN`, where `UU` is the unit and `NN` is the exercise:
 
-## 教材
+- `01`–`09`: core implementations.
+- `11`–`19`: assignment problems; the last digit is the problem number.
+- `21` onward: extensions.
 
-`materials/` 包含投影片／講義和作業，沒有影片。PDF 和 ZIP 不進版控，`MANIFEST.csv` 記錄了每個檔案的來源和 SHA-256。重新下載或檢查：
+## Course materials
+
+`materials/` holds the slides or lecture notes and the assignments, without videos. PDFs and ZIPs are not in version control. `MANIFEST.csv` records each file's source and SHA-256. To download the files again:
 
 ```bash
 python3 -I tools/fetch_materials.py
 ```
 
+To verify them against `MANIFEST.csv`:
+
 ```bash
 python3 -I tools/fetch_materials.py --verify
 ```
 
-這些檔案的著作權屬 MIT 和原作者。repo 只放下載腳本，不重新散布檔案本身，出處和授權見[授權與出處](#授權與出處)。
+These files are copyrighted by MIT and their authors. The repo only ships the download script and does not redistribute the files themselves. See [License and attribution](#license-and-attribution) for sources and licensing.
 
-## 環境說明
+## Environment
 
-原課程的部分工具在 Apple Silicon 上不存在，所以題目做了替換：
+Some of the original courses' tools don't exist on Apple Silicon, so the exercises substitute them:
 
-| 原課程 | 這裡 |
+| Original course | Here |
 | --- | --- |
-| Python 範本 | C++20 |
-| Cilk | `harness/forkjoin.hpp` 的 `fork2` / `parallel_for` |
+| Python templates | C++20 |
+| Cilk | `fork2` / `parallel_for` from `harness/forkjoin.hpp` |
 | Cilksan | ThreadSanitizer |
-| perf / cachegrind | 計時、計數器、確定性的快取模擬器，以及 `sample` / `xctrace` |
-| Valgrind | ASan / UBSan，加上 `Tracked` 型別檢查洩漏 |
-| AVX2 / x86 組語 | 編譯器向量化報告與 ARM NEON |
+| perf / cachegrind | Timers, counters, a deterministic cache simulator, and `sample` / `xctrace` |
+| Valgrind | ASan / UBSan, plus the `Tracked` type for leak checks |
+| AVX2 / x86 assembly | Compiler vectorization reports and ARM NEON |
 
-## 授權與出處
+## License and attribution
 
-本 repo 的所有內容（題目、測試、參考解、工具和文件）以 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 授權，條款全文見 [LICENSE](LICENSE)。你可以自由分享和改作，但要標示出處、不能用於商業目的，分享改作版本時也要用同一個授權。
+Everything in this repo (exercises, tests, reference solutions, tools and documentation) is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). The full text is in [LICENSE](LICENSE). You may share and adapt it freely, as long as you:
 
-題目改編自以下三門 MIT OpenCourseWare 課程，原教材同樣以 CC BY-NC-SA 4.0 授權：
+- give credit;
+- don't use it for commercial purposes;
+- use the same license when you share an adapted version.
+
+The exercises are adapted from these three MIT OpenCourseWare courses, whose materials are also licensed under CC BY-NC-SA 4.0:
 
 - Erik Demaine, Jason Ku, and Justin Solomon. *6.006 Introduction to Algorithms*. Spring 2020. Massachusetts Institute of Technology: MIT OpenCourseWare, <https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/>. License: Creative Commons BY-NC-SA.
 - Erik Demaine, Srini Devadas, and Nancy Lynch. *6.046J Design and Analysis of Algorithms*. Spring 2015. Massachusetts Institute of Technology: MIT OpenCourseWare, <https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/>. License: Creative Commons BY-NC-SA.
 - Charles Leiserson and Julian Shun. *6.172 Performance Engineering of Software Systems*. Fall 2018. Massachusetts Institute of Technology: MIT OpenCourseWare, <https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/>. License: Creative Commons BY-NC-SA.
 
-改編方式：題目敘述、介面、測試和參考解都是用 C++ 重新撰寫的。原課程的 Python 範本、Cilk 和 x86 工具換成了[環境說明](#環境說明)裡的替代品，6.172 的 Leiserchess 專案換成另一個原創遊戲。repo 不包含原課程的講義和作業檔案；用 `tools/fetch_materials.py` 下載的檔案仍適用 [OCW 使用條款](https://ocw.mit.edu/pages/privacy-and-terms-of-use/)。
+How the material was adapted:
 
-這是個人學習用的非官方改編，與 MIT 和 MIT OpenCourseWare 無關，也沒有經過它們審閱或認可。
+- **Rewritten:** the problem statements, interfaces, tests and reference solutions were rewritten in C++.
+- **Restated:** each README restates its original problem in its own words and links to the original PDF on OCW.
+- **Tools substituted:** the original courses' Python templates, Cilk and x86 tools were replaced with the substitutes listed under [Environment](#environment).
+- **New game:** 6.172's Leiserchess project was replaced with an original game.
+- **Not redistributed:** the repo does not include the original lecture notes or assignment files. Files downloaded with `tools/fetch_materials.py` remain subject to the [OCW terms of use](https://ocw.mit.edu/pages/privacy-and-terms-of-use/).
+
+This is an unofficial adaptation for personal study. It is not affiliated with MIT or MIT OpenCourseWare, and has not been reviewed or endorsed by them.

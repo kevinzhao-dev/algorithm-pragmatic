@@ -1,6 +1,6 @@
 ---
-title: 還原 log 的空白（切割 DP 與 Trie）
-unit: 08 · Dynamic Programming II（PS8）
+title: Restoring the Spaces in Logs (segmentation DP and tries)
+unit: 08 · Dynamic Programming II (PS8)
 source: 6.006 PS8 Problem 8-4
 pdf: materials/6.006/psets/ps8/questions.pdf
 answer: materials/6.006/psets/ps8/solutions.pdf
@@ -9,15 +9,32 @@ kind: code
 minutes: 100
 ---
 
-# 0814 · 還原 log 的空白
+# 0814 · Restoring the Spaces in Logs
 
-> **實務上為什麼會遇到**：中文斷詞（jieba 的基本作法）、把 OCR 或 URL 裡黏在一起的字切開，都是「用語料統計的分數，把字串切成字」。O(L²) 次 hash lookup 只有小輸入撐得住，正式的版本要靠 trie 或 DAG 才能在長字串上快起來。
+**Original problem:** [Problem Set 8 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/740643e3711574870a83ebfceee9a8ae_MIT6_006S20_ps8_questions.pdf) · **Read first:** [Recitation 15 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6022dc36557c5e5df2ad0a77e9463855_MIT6_006S20_r15.pdf), [Recitation 18 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/e88f4499b351ab82ebf07c4de2859272_MIT6_006S20_r18.pdf)
 
-文字只有小寫英文字母和空白。**字**是不含空白的極大子字串。有一批未損壞的 log 可以統計每個字的出現次數 `f(w)`，沒出現過的字 `f(w) = 0`。另一批 log 的空白全被弄丟了，要把它還原成字的序列（串起來要等於原字串），使 `Σ f(w)` 最大。
+> **Why this comes up in practice:** Chinese word segmentation (the basic approach in jieba) and splitting words that run together in OCR output or URLs all "cut a string into words using scores from corpus statistics". O(L²) hash lookups only hold up on small inputs; a production version needs a trie or a DAG to be fast on long strings.
 
-一次只看一關，做完再往下讀。
+## Original problem
 
-## Stage 1 — 統計
+6.006 PS8 Problem 8-4 is set aboard a starship. Every day the captain uploads a captain's log: a string of at most m characters, each a lowercase English letter or a space, in which a word is any maximal run of non-space characters. After the captain is abducted, an officer goes through the logs for evidence, but a fault in the upload system has stripped every space out of the last n logs. The officer wants to put the spaces back using the captain's word habits from earlier logs. Given the list L_c of the n corrupted logs and a list L_u of O(m²n) intact logs from before the fault, the officer wants to:
+
+- count, for every word w found in L_u, its number of occurrences f(w) there (f(w) is 0 for a word that never occurs in L_u); and
+- restore each corrupted log ℓ_i ∈ L_c as a sequence of words R_i, called a restoration, whose in-order concatenation is ℓ_i and which maximizes Σ_{w∈R_i} f(w) among all restorations of ℓ_i.
+
+The problem asks for an O(m³n)-time algorithm that carries out this whole procedure. Like every PS8 problem, it must be solved with a dynamic program presented through the SRT BOT steps, and you must also say whether the requested running time is polynomial, pseudopolynomial, or exponential in the size of the input. PS8 has no coding part.
+
+## Your task
+
+The text contains only lowercase English letters and spaces. A **word** is a maximal substring without spaces. One batch of undamaged logs lets you count how many times each word occurs, `f(w)`, with `f(w) = 0` for a word that never occurs. Another batch of logs has lost all of its spaces; restore each of them as a sequence of words (which must concatenate back to the original string) that maximizes `Σ f(w)`.
+
+This is the original problem, one corrupted log at a time. Beyond the best score and a restoration that reaches it, Stage 4 builds a trie so that long logs run in O(L · W + L) time, and breaks ties in favor of fewer words.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Counting
 
 ```cpp
 class WordFrequencies {
@@ -30,22 +47,27 @@ public:
 };
 ```
 
-`count` 拿 `string_view` 來查，不應該為了 lookup 複製字串（用 transparent hash，C++20）。連續空白、前後空白都要處理（`for_each` 留到 Stage 4 再做）。
+`count` looks words up by `string_view` and shouldn't copy the string just to do a lookup (use a transparent hash, C++20). Handle runs of spaces as well as leading and trailing spaces (leave `for_each` until Stage 4; it must call `callback` exactly once for each distinct word, with that word's count).
 
-## Stage 2 — 最佳分數
+## Stage 2 — The best score
 
-`std::int64_t best_restoration_score(const WordFrequencies& frequencies, std::string_view corrupted)`：O(L²) 次 lookup。可以切出沒見過的字（分數 0），空字串的分數是 0。
+```cpp
+std::int64_t best_restoration_score(const WordFrequencies& frequencies,
+                                    std::string_view corrupted);
+```
 
-## Stage 3 — 還原
+`std::int64_t best_restoration_score(const WordFrequencies& frequencies, std::string_view corrupted)`: O(L²) lookups. You may cut out words that were never seen (they score 0), and the empty string scores 0.
+
+## Stage 3 — Restoring
 
 ```cpp
 struct Restoration { std::int64_t score; std::vector<std::string_view> words; };
 Restoration restore(const WordFrequencies& frequencies, std::string_view corrupted);
 ```
 
-回傳一組使分數最大的切法。`words` 指向 `corrupted` 的內容（注意生命週期）。
+Return a segmentation with the highest score. `words` points into the contents of `corrupted` (mind the lifetimes).
 
-## Stage 4 — 長文字用 trie，同分取字數最少
+## Stage 4 — A trie for long text, and the fewest words on ties
 
 ```cpp
 class FastRestorer {
@@ -55,12 +77,18 @@ public:
 };
 ```
 
-- 建構時把所有字放進 trie（一個節點 26 個 child，存在 `std::vector` 裡而不是一堆 `new`）。
-- `restore` 在 O(L · W + L) 時間完成，其中 `W` 是最長已知字的長度，不可以在每個位置掃所有 suffix。
-- 分數相同時，選**字數最少**的切法（比如 `xyz` 全部沒見過時，切成一個字而不是三個）。
+- The constructor puts every word into a trie (26 children per node, stored in a `std::vector` rather than as a pile of `new` allocations).
+- `restore` finishes in O(L · W + L) time, where `W` is the length of the longest known word; it must not scan every suffix at every position.
+- When scores tie, choose the segmentation with **the fewest words** (for example, when nothing in `xyz` has been seen, keep it as one word rather than three).
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼每個位置要考慮的長度只到「最長已知字」？但是沒見過的字也能單獨成字，這部分怎麼處理才不會退回 O(L²)？
-2. 這題是 polynomial、pseudopolynomial 還是 exponential？為什麼 `m` 在這裡不像 8-1 那樣是問題？
-3. `words` 回傳 `std::string_view`，如果呼叫端傳的是暫時的 `std::string` 會發生什麼？你會怎麼讓 API 比較不容易誤用？
+Once you're done, answer without looking at your code:
+
+1. Why does each position only need to consider lengths up to "the longest known word"? Unseen words can still stand as words of their own, though, so how do you handle them without falling back to O(L²)?
+2. Is this problem polynomial, pseudopolynomial, or exponential? Why isn't `m` a problem here the way it is in 8-1 (exercise 0811)?
+3. `words` holds `std::string_view`s. What happens if the caller passes a temporary `std::string`? How would you make the API harder to misuse?
+
+---
+
+**Official solution:** [Problem Set 8 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/39b3ead18e480e4322a8a7308daf8fa1_MIT6_006S20_ps8_solutions.pdf). Read it after you finish.

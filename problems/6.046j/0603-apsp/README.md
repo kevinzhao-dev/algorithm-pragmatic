@@ -1,6 +1,6 @@
 ---
-title: All-Pairs Shortest Paths 四件套
-unit: 06 · Augmentation、APSP 與 MST（PS6）
+title: All-Pairs Shortest Paths, Four Ways
+unit: 06 · Augmentation, APSP, and MST (PS6)
 source: 6.046J Lecture 11
 pdf: materials/6.046j/lectures/lec11.pdf
 read: materials/6.046j/lectures/lec11.pdf
@@ -8,43 +8,80 @@ kind: code
 minutes: 130
 ---
 
-# 0603 · All-Pairs Shortest Paths 四件套
+# 0603 · All-Pairs Shortest Paths, Four Ways
 
-> **實務上為什麼會遇到**：路由表預先計算、推薦系統的 graph-distance 特徵、排程系統的 min/max delay 限制，全部都會落在這幾種 APSP 或它們的變形上。實務上選哪一個，取決於圖是稠密還是稀疏。
+**Based on:** [Dynamic Programming: All-pairs Shortest Paths](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/312f4a419009b58f8147b75975db4347_MIT6_046JS15_lec11.pdf) · **Read first:** [Dynamic Programming: All-pairs Shortest Paths](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/312f4a419009b58f8147b75975db4347_MIT6_046JS15_lec11.pdf)
 
-權重可為負，但 `w[i][i] == 0`。沒有邊用 `kInf` 表示（標頭已定義）。**負環**（negative cycle）要回報，不是崩潰。頂點編號 `0..n-1`。
+> **Why this comes up in practice:** precomputed routing tables, graph-distance features in recommender systems, and min/max delay constraints in schedulers all come down to one of these APSP algorithms or a variant of it. Which one you pick in practice depends on whether the graph is dense or sparse.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — Min-plus 矩陣與 repeated squaring
+Weights may be negative, but `w[i][i] == 0`. A missing edge is `kInf` (already defined in the header). You must report a **negative cycle**, not crash. Vertices are numbered `0..n-1`. In every distance matrix you return, an unreachable pair must be exactly `kInf` (never add a weight or a potential to `kInf`).
 
-- `Matrix min_plus(const Matrix& a, const Matrix& b)`：`(a ⊗ b)[i][j] = min_k (a[i][k] + b[k][j])`，遇到 `kInf` 要正確處理。
-- `std::optional<Matrix> apsp_repeated_squaring(const Matrix& w)`：回傳距離矩陣；有負環回傳 `std::nullopt`。時間 O(n³ log n)。
+You implement the APSP algorithms from Lecture 11 (min-plus repeated squaring, Floyd–Warshall with path recovery, and Johnson's algorithm), then use shortest paths to solve difference constraints.
 
-## Stage 2 — Floyd–Warshall 與路徑還原
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Min-plus matrices and repeated squaring
+
+```cpp
+inline constexpr long long kInf = std::numeric_limits<long long>::max() / 4;
+using Matrix = std::vector<std::vector<long long>>;
+
+Matrix min_plus(const Matrix& a, const Matrix& b);
+std::optional<Matrix> apsp_repeated_squaring(const Matrix& w);
+```
+
+- `Matrix min_plus(const Matrix& a, const Matrix& b)`: `(a ⊗ b)[i][j] = min_k (a[i][k] + b[k][j])`, and it must handle `kInf` correctly.
+- `std::optional<Matrix> apsp_repeated_squaring(const Matrix& w)`: return the distance matrix, or `std::nullopt` if there is a negative cycle. For an empty graph (n = 0), return an empty `Matrix`, not `std::nullopt`. O(n³ log n) time.
+
+## Stage 2 — Floyd–Warshall and path recovery
 
 ```cpp
 class FloydWarshall {
 public:
     explicit FloydWarshall(Matrix w);      // O(n³)
     bool has_negative_cycle() const;
-    long long dist(int u, int v) const;    // kInf 表示不可達（無負環時才保證意義）
-    std::vector<int> path(int u, int v) const;  // {u, ..., v}；不可達或有負環時回傳空；u==v 時是 {u}
+    long long dist(int u, int v) const;    // kInf means unreachable (meaningful only when there is no negative cycle)
+    std::vector<int> path(int u, int v) const;  // {u, ..., v}; empty if unreachable or if there is a negative cycle; {u} when u==v
 };
 ```
 
-## Stage 3 — Johnson（稀疏圖）
+## Stage 3 — Johnson (sparse graphs)
 
-`std::optional<Matrix> johnson(int n, std::span<const Edge> edges)`，`Edge{from, to, weight}`。用 Bellman–Ford 算 potential 再跑 V 次 Dijkstra。時間 O(VE + V² log V)。有負環回傳 `std::nullopt`。
+```cpp
+struct Edge {
+    int from = 0;
+    int to = 0;
+    long long weight = 0;
+};
+std::optional<Matrix> johnson(int n, std::span<const Edge> edges);
+```
 
-## Stage 4 — 實務延伸：差分約束排程
+`std::optional<Matrix> johnson(int n, std::span<const Edge> edges)`, with `Edge{from, to, weight}`. Compute potentials with Bellman–Ford, then run Dijkstra V times. O(VE + V² log V) time. Return `std::nullopt` if there is a negative cycle. The edge list may contain parallel edges; the lightest one counts.
 
-工作流系統常見「B 要在 A 結束後 5 到 10 分鐘內開始」這類限制。每條限制寫成 `Constraint{later, earlier, bound}`，意思是 `x[later] - x[earlier] ≤ bound`（x 為整數，可負）。
+## Stage 4 — Real-world extension: scheduling with difference constraints
 
-`std::optional<std::vector<long long>> solve_difference_constraints(int n, std::span<const Constraint> constraints)`：回傳一組滿足全部限制的 `x`，無解時回傳 `std::nullopt`。時間 O(VE)。
+```cpp
+struct Constraint {
+    int later = 0;
+    int earlier = 0;
+    long long bound = 0;
+};
+std::optional<std::vector<long long>> solve_difference_constraints(
+    int n, std::span<const Constraint> constraints);
+```
 
-## 面試追問
+Workflow systems often have constraints such as "B must start 5 to 10 minutes after A finishes". Each constraint is written as `Constraint{later, earlier, bound}`, meaning `x[later] - x[earlier] ≤ bound` (the x values are integers and may be negative).
 
-1. Matrix multiplication 版本為什麼不能用 Strassen 加速？min-plus semiring 缺什麼？
-2. Johnson 的 reweighting 為什麼能保留所有最短路徑？除了 Bellman–Ford，h 還需要滿足什麼條件？
-3. 差分約束無解等價於圖上有負環——用一句話講清楚這個 contradiction 的來源（對環上的不等式求和）。
+`std::optional<std::vector<long long>> solve_difference_constraints(int n, std::span<const Constraint> constraints)`: return an `x` that satisfies every constraint, or `std::nullopt` if there is none. O(VE) time.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why can't the matrix-multiplication version be sped up with Strassen? What is the min-plus semiring missing?
+2. Why does Johnson's reweighting preserve every shortest path? Bellman–Ford aside, what condition must h satisfy?
+3. A system of difference constraints has no solution exactly when the graph has a negative cycle. Explain in one sentence where the contradiction comes from (sum the inequalities around the cycle).

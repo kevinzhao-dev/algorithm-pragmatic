@@ -1,6 +1,6 @@
 ---
-title: 動態與限跳數 All-Pairs Shortest Paths
-unit: 06 · Augmentation、APSP 與 MST（PS6）
+title: Dynamic and Bounded-Hop All-Pairs Shortest Paths
+unit: 06 · Augmentation, APSP, and MST (PS6)
 source: 6.046J PS6 Problem 6-1
 pdf: materials/6.046j/psets/ps06/questions.pdf
 answer: materials/6.046j/psets/ps06/solutions.pdf
@@ -9,65 +9,114 @@ kind: code
 minutes: 150
 ---
 
-# 0611 · 動態與限跳數 APSP
+# 0611 · Dynamic and Bounded-Hop APSP
 
-> **實務上為什麼會遇到**：WAN 的 link 權重會隨 congestion 變動，路由引擎不想每次都重算整張表；SLA 又常限制「最多經過 h 個 hop」。這題把靜態 APSP 改造成一個可以線上更新的路由表引擎。
+**Original problem:** [Problem Set 6](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d33d30d2402b35cc4094df7cac04d113_MIT6_046JS15_pset6.pdf) · **Read first:** [Dynamic Programming: All-pairs Shortest Paths](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/312f4a419009b58f8147b75975db4347_MIT6_046JS15_lec11.pdf)
 
-權重皆為非負整數，`w[i][i] == 0`，沒有邊用 `kInf`（標頭已定義）。`i == j` 的更新一律是 no-op。一次只看一關，每關的 class 都獨立，互不干擾。
+> **Why this comes up in practice:** WAN link weights change with congestion, and a routing engine doesn't want to recompute the whole table each time. SLAs also often impose limits like "at most h hops". This exercise turns static APSP into a routing-table engine that can be updated online.
 
-## Stage 1 — 動態 APSP（Part a）
+## Original problem
+
+6.046J PS6 Problem 6-1 extends the all-pairs shortest-paths algorithms from lecture and CLRS Chapter 25 in two directions. Throughout, edge weights are nonnegative reals and the vertices are numbered 1 to n. The motivating example is a communication network whose link weights change over time, so the shortest distances used for routing have to be kept up to date. Every part is answered on paper, with an algorithm and its analysis or with a construction.
+
+- (a) You are given a weighted digraph G = (V, E, W), a correct distance matrix D, the matching predecessor matrix Π, and a triple (i, j, r) with i, j ∈ V and r a nonnegative real. Design an efficient algorithm that updates D and Π when w(i,j) is set to r. Treat the cases r = w(i,j), r < w(i,j) and r > w(i,j) separately and analyze each one; one of them is allowed to need O(V³) time in the worst case.
+- (b) Construct a graph, its distance matrix D and a triple (i, j, r) for which every algorithm that updates D must take Ω(V²) time.
+
+The remaining parts add a hop limit h, with 0 ≤ h ≤ n − 1: D must now hold the shortest distance over paths that use at most h edges.
+
+- (c) Modify Floyd–Warshall to solve this bounded-hop APSP problem, and analyze its running time as a function of the graph's size and h.
+- (d) Modify the matrix-multiplication method of CLRS Section 25.1 for the same problem, aiming for a running time that grows only logarithmically in h, and analyze it.
+- (e) Make bounded-hop APSP dynamic. The input is G, h, a correct at-most-h-hop distance matrix D (plus any auxiliary distance data you choose to maintain), and a triple (i, j, r). Update D and your auxiliary data when w(i,j) is set to r, again handling and analyzing the three cases of part (a) in terms of the graph's size and h.
+
+## Your task
+
+All weights are nonnegative integers, `w[i][i] == 0`, and a missing edge is `kInf` (already defined in the header). An update with `i == j` is always a no-op. The classes in different stages are independent and don't interfere with each other.
+
+Each stage implements one part, (a) through (e); for part (b) you build the lower-bound instance in code instead of describing it. Unlike the original, weights are integers, and Stage 1's `update` also returns how many distances changed.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Dynamic APSP (Part a)
 
 ```cpp
 class DynamicApsp {
 public:
     explicit DynamicApsp(Matrix w);         // O(V³)
-    long long dist(int u, int v) const;     // kInf 表示不可達
-    std::vector<int> path(int u, int v) const;     // {u, ..., v}；不可達回傳空；u==v 回傳 {u}
-    // 把 w(i,j) 改成 r（r 可為 kInf，代表刪邊）。回傳「距離值真的改變」的 ordered pair 數量。
+    long long dist(int u, int v) const;     // kInf means unreachable
+    std::vector<int> path(int u, int v) const;     // {u, ..., v}; empty if unreachable; {u} when u==v
+    // Set w(i,j) to r (r may be kInf, which deletes the edge). Return the number of ordered pairs whose distance actually changed.
     long long update(int i, int j, long long r);
 };
 ```
 
-三種情況的複雜度要求不同：
+The three cases have different complexity requirements:
 
-| 情況 | 複雜度 |
+| Case | Complexity |
 | --- | --- |
 | `r == w(i,j)` | O(1) |
-| `r < w(i,j)`（邊變輕、或新增邊） | O(V²) |
-| `r > w(i,j)` | O(V³) 可接受 |
+| `r < w(i,j)` (the edge gets lighter, or a new edge is added) | O(V²) |
+| `r > w(i,j)` | O(V³) is acceptable |
 
-更新之後 `dist` 和 `path` 都必須是新圖上正確的答案。
+After an update, both `dist` and `path` must give correct answers for the new graph.
 
-## Stage 2 — 下界（Part b）
+## Stage 2 — A lower bound (Part b)
+
+```cpp
+struct Scenario {
+    Matrix w;
+    int i = 0;
+    int j = 0;
+    long long r = 0;
+};
+Scenario worst_update_scenario(int n);
+```
 
 `struct Scenario { Matrix w; int i; int j; long long r; };`
 
-`Scenario worst_update_scenario(int n)`：給定 `n ≥ 2`，建構一張 n 個頂點的圖與一次更新，使任何演算法都得改動 Ω(n²) 個 `D` 的 entry（具體來說：`update` 回傳值至少 `n*n/4`）。想想有多少 ordered pair 的距離會因為一條邊而從 `kInf` 變成有限值。
+`Scenario worst_update_scenario(int n)`: given `n ≥ 2`, build a graph on n vertices and a single update that forces any algorithm to change Ω(n²) entries of `D` (concretely, `update` must return at least `n*n/4`). Think about how many ordered pairs can have their distance go from `kInf` to a finite value because of one edge.
 
-## Stage 3 — 限跳數的 Floyd-Warshall（Part c）
+The tests check this by running your Stage 1 `DynamicApsp` on the scenario: its `update` must return the exact number of ordered pairs that changed, and `dist` and `path` must be correct afterwards, so finish Stage 1 first.
 
-`Matrix bounded_hop_floyd(const Matrix& w, int h)`：回傳 `D[i][j]` = 最多 h 條邊的 i→j 最短路徑權重，`0 ≤ h ≤ n-1`。時間 O(V³ h²)，空間 O(V² h)。
+## Stage 3 — Bounded-hop Floyd-Warshall (Part c)
 
-## Stage 4 — 限跳數的 repeated squaring（Part d）
+```cpp
+Matrix bounded_hop_floyd(const Matrix& w, int h);
+```
 
-`Matrix bounded_hop_doubling(const Matrix& w, int h)`：同上定義，時間 O(V³ log h)。
+`Matrix bounded_hop_floyd(const Matrix& w, int h)`: return `D` where `D[i][j]` is the weight of the shortest i→j path with at most h edges, for `0 ≤ h ≤ n-1`. O(V³ h²) time and O(V² h) space.
 
-## Stage 5 — 動態限跳數 APSP（Part e）
+## Stage 4 — Bounded-hop repeated squaring (Part d)
+
+```cpp
+Matrix bounded_hop_doubling(const Matrix& w, int h);
+```
+
+`Matrix bounded_hop_doubling(const Matrix& w, int h)`: the same definition as above, in O(V³ log h) time.
+
+## Stage 5 — Dynamic bounded-hop APSP (Part e)
 
 ```cpp
 class DynamicBoundedApsp {
 public:
     DynamicBoundedApsp(Matrix w, int h);
-    long long dist(int u, int v) const;                 // 最多 h 跳
-    long long dist_at_most(int u, int v, int k) const;  // 最多 k 跳，0 ≤ k ≤ h
+    long long dist(int u, int v) const;                 // at most h hops
+    long long dist_at_most(int u, int v, int k) const;  // at most k hops, 0 ≤ k ≤ h
     void update(int i, int j, long long r);
 };
 ```
 
-建構 O(V³ h)。`r == w` 時 O(1)；`r < w` 時 O(V² h²)；`r > w` 時 O(V³ h)。
+Construction takes O(V³ h). An update takes O(1) when `r == w`, O(V² h²) when `r < w`, and O(V³ h) when `r > w`. Unlike Stages 3 and 4, this class must accept any `h ≥ 1`, including `h = n` (the tests use `1 ≤ h ≤ n`), and as in Stage 1 an update may set `r` to `kInf`.
 
-## 面試追問
+## Interview follow-ups
 
-1. `r < w(i,j)` 的更新為什麼不需要重算 `d(x,i)` 和 `d(j,y)` 就能安心使用它們？這用到了什麼假設（負邊可以嗎）？
-2. 為什麼限跳數時 repeated squaring 比 Floyd-Warshall 好？平常的 APSP 不是剛好相反嗎？
-3. `r > w(i,j)` 真的需要 O(V³) 嗎？能不能只重算「最短路徑樹經過這條邊」的 source？最壞情況會省到多少？
+Once you're done, answer without looking at your code:
+
+1. For an update with `r < w(i,j)`, why can you safely use `d(x,i)` and `d(j,y)` without recomputing them? What assumption does this rely on (would negative edges be OK)?
+2. Why is repeated squaring better than Floyd-Warshall when hops are bounded? Isn't it the other way around for ordinary APSP?
+3. Does `r > w(i,j)` really need O(V³)? Could you recompute only the sources whose shortest-path tree uses this edge? How much does that save in the worst case?
+
+---
+
+**Official solution:** [Solutions to Problem Set 6](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/832add4a924cdca6111fe115e6bba85e_MIT6_046JS15_pset6sols.pdf). Read it after you finish.

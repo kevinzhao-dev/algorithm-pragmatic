@@ -1,6 +1,6 @@
 ---
-title: 倉儲機器人的取貨任務（門禁、識別證、來回最短）
-unit: 05 · Graph Search（PS5）
+title: Warehouse Robot Errand (access-controlled doors, badges, shortest round trip)
+unit: 05 · Graph Search (PS5)
 source: 6.006 PS5 Problem 5-5
 pdf: materials/6.006/psets/ps5/questions.pdf
 answer: materials/6.006/psets/ps5/solutions.pdf
@@ -9,11 +9,21 @@ kind: code
 minutes: 110
 ---
 
-# 0515 · 倉儲機器人的取貨任務
+# 0515 · Warehouse Robot Errand
 
-> **實務上為什麼會遇到**：機器人路徑規劃、遊戲裡的鑰匙與機關、服務之間的權限鏈（拿到某個 token 才能呼叫下一個 API），都是「走到哪裡」之外還要記得「手上有什麼」的搜尋問題。
+**Original problem:** [Problem Set 5 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/8c155b28c87cc1fe3f506de2036bdf1b_MIT6_006S20_ps5_questions.pdf) · **Read first:** [Lecture 9: Breadth-First Search notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/196a95604877d326c6586e60477b59d4_MIT6_006S20_lec9.pdf), [Recitation 9 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6afd7e9a85d7d36e204533569f9fccf6_MIT6_006S20_r09.pdf)
 
-倉儲裡有 `locations` 個地點（`0 … locations-1`），由門相連。機器人從 `dock` 出發，要走到**至少一個**放了貨物的地點，再回到 `dock`，並讓穿過門的次數最少。
+> **Why this comes up in practice:** robot path planning, keys and switches in games, and permission chains between services (you need a certain token before you can call the next API) are all search problems where, besides where you are, you also have to remember what you're holding.
+
+## Original problem
+
+6.006 PS5 Problem 5-5 follows a student hunting for free pizza in a huge, maze-like building. The map gives a set L of locations, where a whole elevator shaft is treated as a single location that has a door on each floor it serves, and a set D of doors, each connecting two locations. The path has to begin and end at the entrance/exit e ∈ L, and every location in a subset Π ⊂ L has a free pizza. A door d = (ℓ₁, ℓ₂) is either one-way, usable only from ℓ₁ to ℓ₂, or two-way. Some doors are also locked to one of four lab key cards: card t lies at a known location ℓₜ, and a door locked to t opens only once she holds card t.
+
+Give an O(|L| + |D|)-time algorithm for a round trip from e that grabs at least one pizza, picking up whatever cards it needs, with the fewest door crossings.
+
+## Your task
+
+A warehouse has `locations` locations (`0 … locations-1`) connected by doors. The robot starts at `dock`, must reach **at least one** location that holds an item, and must then return to `dock`, passing through as few doors as possible.
 
 ```cpp
 inline constexpr int kNoBadge = -1;
@@ -34,32 +44,52 @@ struct Site {
 };
 ```
 
-規則：
+Rules:
 
-- 機器人**一抵達**某個地點（包含一開始在 `dock`），就自動拿起那裡所有的識別證和貨物，之後一直帶著。
-- 要穿過 `badge != kNoBadge` 的門，身上必須已經有那張識別證（雙向門兩個方向都一樣）。
-- 同一個地點、同一扇門都可以重複經過。
+- **As soon as** the robot arrives at a location (including being at `dock` at the start), it automatically picks up every badge and item there and keeps them from then on.
+- To pass through a door with `badge != kNoBadge`, the robot must already carry that badge (in both directions for a two-way door).
+- The robot may pass the same location and the same door any number of times.
 
-`L = locations`、`D = doors.size()`、`k = badge_locations.size()`。一次只看一關，做完再往下讀。
+`L = locations`, `D = doors.size()`, and `k = badge_locations.size()`.
 
-## Stage 1 — 沒有門禁
+This is the original problem with pizzas as items and key cards as badges, except that there can be up to 8 badges instead of four. Stage 1 has no badges, Stage 2 adds them, and Stage 3 asks for the route itself.
 
-`fewest_doors(site)`：回傳最少穿過幾次門，做不到回傳 `std::nullopt`。這一關所有門的 `badge` 都是 `kNoBadge`，`badge_locations` 是空的。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`dock` 本身就放了貨物時答案是 0。
+Read one stage at a time, and finish it before reading on.
 
-把 `k` 視為常數，要做到 O(L + D)。
+## Stage 1 — No access control
 
-## Stage 2 — 門禁
+```cpp
+std::optional<int> fewest_doors(const Site& site);
+```
 
-這一關開始，門可以要求識別證。`fewest_doors` 要照規則算出最少次數，一樣要 O(L + D)（`k` 視為常數）。
+`fewest_doors(site)`: return the fewest door passages, or `std::nullopt` if the errand can't be done. In this stage every door's `badge` is `kNoBadge`, and `badge_locations` is empty.
 
-## Stage 3 — 交出路線
+If `dock` itself holds an item, the answer is 0.
 
-`errand_route(site)`：回傳實際走過的地點序列（第一個和最後一個都是 `dock`，`dock` 有貨物時就是只有 `dock` 一個元素的序列），做不到回傳 `std::nullopt`。最短路線不只一條時，回傳任一條都算對。
+Treating `k` as a constant, you must achieve O(L + D).
 
-## 面試追問
+## Stage 2 — Access control
 
-1. 你的搜尋實際上走的是一張什麼圖？它有幾個頂點、幾條邊？`k` 變成 30 時會發生什麼事，怎麼辦？
-2. Stage 3 的路線什麼時候必須重複經過同一個地點？能不能舉一個最短路線一定要繞回頭的例子？
-3. 如果每扇門的通過時間不同，你要換掉 BFS 的哪一部分？整個建模要改嗎？
+From this stage on, doors can require badges. `fewest_doors` must compute the minimum number by the rules, still in O(L + D) (treating `k` as a constant).
+
+## Stage 3 — The route itself
+
+```cpp
+std::optional<std::vector<int>> errand_route(const Site& site);
+```
+
+`errand_route(site)`: return the sequence of locations the robot actually walks through (the first and the last are both `dock`; if `dock` holds an item, the sequence is just `dock` on its own), or `std::nullopt` if the errand can't be done. When there is more than one shortest route, returning any of them is correct.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. What graph does your search actually traverse? How many vertices and edges does it have? What happens when `k` grows to 30, and what would you do about it?
+2. When does a Stage 3 route have to pass the same location more than once? Can you give an example where every shortest route has to double back?
+3. If every door took a different amount of time to pass through, which part of BFS would you replace? Would the whole model have to change?
+
+---
+
+**Official solution:** [Problem Set 5 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/23d4cf5421c77bb55b3735f7e8f70dfe_MIT6_006S20_ps5_solutions.pdf). Read it after you finish.

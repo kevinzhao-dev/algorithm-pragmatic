@@ -1,6 +1,6 @@
 ---
-title: 電動車路線規劃（電量也是座標的一部分）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: EV Route Planner (battery charge is part of the coordinates)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 PS6 Problem 6-5
 pdf: materials/6.006/psets/ps6/questions.pdf
 answer: materials/6.006/psets/ps6/solutions.pdf
@@ -9,11 +9,29 @@ kind: code
 minutes: 110
 ---
 
-# 0615 · 電動車路線規劃
+# 0615 · EV Route Planner
 
-> **實務上為什麼會遇到**：電動車導航、無人機航線、配額受限的 API 呼叫鏈，全都是「最短路徑，但手上的資源會影響接下來能走哪裡」。真正要練的是：什麼東西應該算進搜尋的狀態裡。
+**Original problem:** [Problem Set 6 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0cb5c705752261af9da744c22925a136_MIT6_006S20_ps6_questions.pdf) · **Read first:** [Lecture 13: Dijkstra’s Algorithm notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/d819e7f4568aced8d5b59e03db6c7b67_MIT6_006S20_lec13.pdf), [Recitation 13 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ec187276db0faaa047d655979a44de7f_MIT6_006S20_r13.pdf)
 
-一輛電動車要從 `source` 開到 `target`，時間越短越好。
+> **Why this comes up in practice:** EV navigation, drone flight paths, and API call chains under a quota are all shortest-path problems where the resources you hold affect where you can go next. What you're really practicing is deciding what belongs in the search state.
+
+## Original problem
+
+6.006 PS6 Problem 6-5 has a race car heading across the country to a road race, using a map of:
+
+- n intersections xᵢ, each with a positive integer elevation eᵢ, some of which have a gas station; and
+- r roads between pairs of intersections, where road rⱼ takes positive integer time tⱼ to drive in either direction.
+
+Intersections average fewer than 5 roads each, though some have many. The car must travel from intersection s to the track, which is at intersection t, under two rules:
+
+- The tank's capacity is g units, where g < n is a positive integer, and it begins full. At a gas station it can be topped up by any whole number of units, and each unit takes exactly t_G time.
+- Only climbs burn gas: a road from elevation eᵢ up to eⱼ > eᵢ burns eⱼ − eᵢ units, and level or downhill roads burn none.
+
+Give an O(n² log n)-time algorithm for the quickest trip from s to t during which the amount of gas stays strictly above zero, or report that no such trip exists.
+
+## Your task
+
+An electric car must drive from `source` to `target`, as fast as possible.
 
 ```cpp
 struct Road {
@@ -31,28 +49,42 @@ struct RoadMap {
 };
 ```
 
-規則：
+Rules:
 
-- 從 `source` 出發時電量是滿的（`capacity` 單位）。
-- 從路口 `x` 開上一條路到 `y`：時間 `minutes`，若 `y` 比 `x` 高則消耗 `elevation[y] - elevation[x]` 單位電量，下坡和平路都不耗電。
-- 電量**在任何時刻都必須大於 0**（到達路口時也一樣）。
-- 在有充電站的路口（包含 `source`、`target`）可以充任意整數單位的電，每單位花 `minutes_per_unit` 分鐘，總電量不能超過 `capacity`。
+- The car leaves `source` with a full battery (`capacity` units).
+- Driving a road from intersection `x` to `y` takes `minutes`. If `y` is higher than `x`, it uses `elevation[y] - elevation[x]` units of charge; driving downhill or on the flat uses none.
+- The charge **must be greater than 0 at all times** (including on arrival at an intersection).
+- At an intersection with a charger (including `source` and `target`), the car can charge any whole number of units. Each unit takes `minutes_per_unit` minutes, and the total charge can't exceed `capacity`.
 
-`source` 或 `target` 不存在時丟 `std::out_of_range`。令 `g = capacity`、`n` 為路口數、`r` 為道路數。一次只看一關，做完再往下讀。
+Throw `std::out_of_range` if `source` or `target` doesn't exist. Let `g = capacity`, let `n` be the number of intersections, and let `r` be the number of roads.
 
-## Stage 1 — 沒有充電站
+This is the original problem with gas as battery charge and gas stations as chargers. Stage 1 has no chargers, Stage 2 adds them, and Stage 3 asks for the trip itself, including how much to charge at each stop.
 
-`fastest_time(map, source, target)`：這一關所有 `has_charger` 都是 0。回傳最短時間，到不了回傳 `std::nullopt`；`source == target` 時是 0。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-要 O((n + r) · g · log(n · g))。注意：最快的路線不一定留得住足夠的電量。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 充電
+## Stage 1 — No chargers
 
-開放充電站。`fastest_time` 必須把充電也考慮進去，一樣要 O((n + r) · g · log(n · g))，`g` 可以遠大於 `n`，所以充電的處理不能讓複雜度多出一個 `g` 倍。
+```cpp
+std::optional<std::int64_t> fastest_time(const RoadMap& map, int source, int target);
+```
 
-## Stage 3 — 交出行程
+`fastest_time(map, source, target)`: in this stage every `has_charger` is 0. Return the shortest time, or `std::nullopt` if `target` can't be reached; the time is 0 when `source == target`.
 
-`fastest_plan(map, source, target)` 回傳 `RoutePlan`：
+Must run in O((n + r) · g · log(n · g)). Note that the fastest route doesn't necessarily keep enough charge.
+
+## Stage 2 — Charging
+
+Chargers are now in use. `fastest_time` must take charging into account, still in O((n + r) · g · log(n · g)). `g` can be far larger than `n`, so handling charging must not multiply the complexity by another factor of `g`.
+
+## Stage 3 — Producing the trip
+
+```cpp
+std::optional<RoutePlan> fastest_plan(const RoadMap& map, int source, int target);
+```
+
+`fastest_plan(map, source, target)` returns a `RoutePlan`:
 
 ```cpp
 struct Stop {
@@ -65,10 +97,16 @@ struct RoutePlan {
 };
 ```
 
-到不了回傳 `std::nullopt`。行程要能真的跑得完；最快的行程不只一種時，回傳任一種都算對。
+Return `std::nullopt` if `target` can't be reached. The trip must actually be drivable; when there is more than one fastest trip, returning any of them is correct.
 
-## 面試追問
+## Interview follow-ups
 
-1. 這張圖有幾個頂點、幾條邊？跟原本的路網差多少？
-2. 為什麼每次只充一單位就夠了？改成「每個路口直接決定充多少」會多花多少時間？
-3. 如果電池有回充（下坡加電），你的做法要改哪裡？會不會影響 Dijkstra 的前提？
+Once you're done, answer without looking at your code:
+
+1. How many vertices and edges does this graph have? How does that compare with the original road network?
+2. Why is it enough to charge one unit at a time? How much more time would it take to decide directly how much to charge at each intersection?
+3. If the battery could regenerate (gaining charge downhill), what would you have to change? Would it affect the assumptions Dijkstra relies on?
+
+---
+
+**Official solution:** [Problem Set 6 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9073af3b8151002c5f63d06dc7ac961e_MIT6_006S20_ps6_solutions.pdf). Read it after you finish.

@@ -1,6 +1,6 @@
 ---
-title: Maximum Flow（Ford-Fulkerson、Edmonds-Karp、Min Cut）
-unit: 07 · Network Flow（PS7）
+title: Maximum Flow (Ford-Fulkerson, Edmonds-Karp, min cut)
+unit: 07 · Network Flow (PS7)
 source: 6.046J Lecture 13, Lecture 14
 pdf: materials/6.046j/lectures/lec13.pdf
 read: materials/6.046j/lectures/lec13.pdf, materials/6.046j/lectures/lec14a.pdf, materials/6.046j/recitations/rec07.pdf
@@ -10,45 +10,79 @@ minutes: 120
 
 # 0701 · Maximum Flow
 
-> **實務上為什麼會遇到**：骨幹網路的可用頻寬、資料中心的 replica 遷移、任何「把量從 A 搬到 B」的容量規劃。瓶頸通常是 min cut：它直接告訴你該升級哪幾條 link，而不是憑感覺加錢。
+**Based on:** [Incremental Improvement: Max Flow, Min Cut](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ac6b6e8ac932bb5dfb6506fd0db9d5ad_MIT6_046JS15_lec13.pdf) · **Read first:** [Incremental Improvement: Max Flow, Min Cut](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ac6b6e8ac932bb5dfb6506fd0db9d5ad_MIT6_046JS15_lec13.pdf), [Incremental Improvement: Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bdafe05f4f3c20cabfd08d2fbd099f63_MIT6_046JS15_lec14A.pdf), [Incremental Improvement: Applications of Network Flow & Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ba74f89434fc261d9366ebf136c04b52_MIT6_046JS15_Recitation7.pdf)
 
-有向圖，頂點 `0..n-1`，容量為非負整數。允許平行邊和反向邊（`u→v` 與 `v→u` 可同時存在）。`u == v` 的邊不會出現。
+> **Why this comes up in practice:** available bandwidth on a backbone network, replica migration in a data center, and any capacity planning that moves some amount from A to B. The bottleneck is usually a min cut: it tells you exactly which links to upgrade, instead of spending money on a hunch.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — Residual graph 與 Ford-Fulkerson
+The graph is directed, with vertices `0..n-1` and nonnegative integer capacities. Parallel edges and reverse edges are allowed (`u→v` and `v→u` may both exist). Edges with `u == v` never appear.
+
+You build one `FlowNetwork` class step by step, following Lectures 13 and 14: Ford-Fulkerson, then Edmonds-Karp, then a min-cut certificate and a path decomposition of the flow.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Residual graph and Ford-Fulkerson
 
 ```cpp
 class FlowNetwork {
 public:
     explicit FlowNetwork(int n);
-    int add_edge(int u, int v, long long capacity);   // 回傳 edge id，從 0 遞增
-    long long max_flow_dfs(int s, int t);             // DFS 找 augmenting path
-    long long flow_on(int id) const;                  // 最後一次計算之後、該邊的流量
+    int add_edge(int u, int v, long long capacity);   // returns the edge id, increasing from 0
+    long long max_flow_dfs(int s, int t);             // finds augmenting paths with DFS
+    long long flow_on(int id) const;                  // flow on that edge after the last computation
 };
 ```
 
-- 每次呼叫 `max_flow_dfs` 都從零重新計算。
-- `s == t` 時丟 `std::invalid_argument`。
-- 流量必須滿足 capacity constraint 與 flow conservation；`t` 不可達時回傳 0。
+- Every call to `max_flow_dfs` recomputes from scratch.
+- Throw `std::invalid_argument` when `s == t`.
+- The flow must satisfy the capacity constraints and flow conservation; return 0 when `t` is unreachable.
 
 ## Stage 2 — Edmonds-Karp
 
-新增 `long long max_flow_bfs(int s, int t)`：每次都找最短（邊數最少）的 augmenting path，O(VE²)。新增 `int augmentations() const`：回傳最後一次計算用了幾條 augmenting path。
+```cpp
+// in class FlowNetwork
+long long max_flow_bfs(int s, int t);
+int augmentations() const;
+```
 
-## Stage 3 — Min cut 憑證
+Add `long long max_flow_bfs(int s, int t)`: always augment along a shortest augmenting path (the one with the fewest edges), O(VE²). Add `int augmentations() const`: return how many augmenting paths the last computation used.
 
-計算完 max flow 之後：
+Like `max_flow_dfs`, `max_flow_bfs` recomputes from scratch on every call (the tests run both on the same network). The tests check that `augmentations()` after `max_flow_bfs` is at most V·E, where E counts every `add_edge` call.
 
-- `std::vector<bool> min_cut_side() const`：`S` 集合（`s` 在內，`t` 不在內），cut capacity 必須等於 flow 值。
-- `std::vector<int> cut_edges() const`：所有 `u∈S, v∉S` 的邊 id，升冪。
+## Stage 3 — A min-cut certificate
 
-## Stage 4 — 實務延伸：把 flow 拆成路徑清單
+```cpp
+// in class FlowNetwork
+std::vector<bool> min_cut_side() const;
+std::vector<int> cut_edges() const;
+```
 
-路由器要的是「這條 LSP 走哪些 link、帶多少量」。`std::vector<PathFlow> decompose() const`（`PathFlow{edges, amount}`）：把目前的 flow 拆成若干條 `s→t` 的 simple path，`edges` 是 edge id 序列，`amount > 0`；amount 總和等於 flow 值，每條邊被分配到的量不超過 `flow_on`，路徑數不超過邊數。
+After computing a max flow:
 
-## 面試追問
+- `std::vector<bool> min_cut_side() const`: the set `S` (containing `s` but not `t`); the cut's capacity must equal the flow value.
+- `std::vector<int> cut_edges() const`: the ids of all edges with `u∈S, v∉S`, in increasing order.
 
-1. 為什麼 Ford-Fulkerson 在無理數容量下可能不收斂、在整數容量下收斂？Edmonds-Karp 的 augmentation 上界 O(VE) 用了哪個單調性？
-2. 把容量大的邊反覆切成小流量，真實系統會遇到什麼問題？Dinic 比 Edmonds-Karp 快在哪？
-3. Max-flow min-cut 為什麼可以當成「最佳解證明」？給你一個別人的 max flow 結果，怎麼在 O(E) 內驗證它真的最大？
+## Stage 4 — Real-world extension: decomposing a flow into a list of paths
+
+```cpp
+// in class FlowNetwork
+struct PathFlow {
+    std::vector<int> edges;
+    long long amount = 0;
+};
+
+std::vector<PathFlow> decompose() const;
+```
+
+A router wants to know "which links this LSP uses and how much it carries". `std::vector<PathFlow> decompose() const` (`PathFlow{edges, amount}`): split the current flow into simple `s→t` paths, where `edges` is a sequence of edge ids and `amount > 0`. The amounts add up to the flow value, no edge is assigned more than its `flow_on`, and there are no more paths than edges. Each path takes the full bottleneck of the flow still unassigned along it, so a flow that uses a single route comes back as a single path.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why may Ford-Fulkerson fail to terminate with irrational capacities, yet always terminate with integer capacities? Which monotonicity property does Edmonds-Karp's O(VE) bound on augmentations rely on?
+2. What problems does a real system run into when high-capacity edges keep getting split into small flows? Where does Dinic gain over Edmonds-Karp?
+3. Why can max-flow min-cut serve as a "proof of optimality"? Given someone else's max flow, how do you verify in O(E) that it really is maximum?

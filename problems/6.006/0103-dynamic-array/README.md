@@ -1,6 +1,6 @@
 ---
-title: Dynamic Array（攤提分析與 Exception Safety）
-unit: 01 · Sequences（PS1）
+title: Dynamic Array (amortized analysis and exception safety)
+unit: 01 · Sequences (PS1)
 source: 6.006 Lecture 2, Recitation 2
 pdf: materials/6.006/recitations/rec02.pdf
 read: materials/6.006/lectures/lec02.pdf
@@ -10,53 +10,102 @@ minutes: 120
 
 # 0103 · Dynamic Array
 
-> **實務上為什麼會遇到**：`std::vector` 是你寫 C++ 最常用的容器。尾端插入為什麼是攤提 O(1)、為什麼刪到快空了也不該馬上縮小、為什麼 `move` 不標 `noexcept` 會讓 `vector` 擴容時退回複製，都在這一題裡。
+**Based on:** [Recitation 2 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/c08a3b63dfe5f6f6b32257d35f86ae63_MIT6_006S20_r02.pdf) · **Read first:** [Lecture 2: Data Structures notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf)
 
-自己管理記憶體，**不可使用 `std::vector`、`std::deque`**。`T` 不一定能 default-construct，所以不能用 `new T[n]`：要用 `std::allocator`（或 `::operator new`）配置原始記憶體，再用 `std::construct_at` 把物件放進去，並確實呼叫解構子。
+> **Why this comes up in practice:** `std::vector` is the container you use most when you write C++. Why insertion at the end is amortized O(1), why an array that is nearly empty after deletions still shouldn't shrink right away, and why a `move` not marked `noexcept` makes `vector` fall back to copying when it grows: it's all in this exercise.
 
-一次只看一關，做完再往下讀。
+## Your task
 
-## Stage 1 — 基本操作與物件生命週期
+Manage the memory yourself: **do not use `std::vector` or `std::deque`**. `T` can't necessarily be default-constructed, so you can't use `new T[n]`: allocate raw memory with `std::allocator` (or `::operator new`), put the objects into it with `std::construct_at`, and make sure the destructors get called.
 
-| 操作 | 行為 | 複雜度 |
+You build `DynamicArray<T>`, a container like `std::vector` with amortized O(1) operations at the end, value semantics, insertion and deletion in the middle, and the strong exception guarantee for `insert_last`.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Basic operations and object lifetimes
+
+```cpp
+template <typename T>
+class DynamicArray {
+public:
+    DynamicArray();
+
+    ~DynamicArray();
+
+    std::size_t size() const;
+    std::size_t capacity() const;
+    bool empty() const;
+
+    const T& get_at(std::size_t i) const;
+    void set_at(std::size_t i, T value);
+
+    T& operator[](std::size_t i);
+    const T& operator[](std::size_t i) const;
+
+    void insert_last(T value);
+    T delete_last();
+
+    T* begin();
+    T* end();
+    const T* begin() const;
+    const T* end() const;
+};
+```
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `DynamicArray()` | 空陣列，不可配置記憶體 | O(1) |
-| `insert_last(v)` | 尾端新增 | 攤提 O(1) |
-| `delete_last()` | 刪除並回傳尾端元素；空陣列丟 `std::out_of_range` | 攤提 O(1) |
-| `size()`、`capacity()`、`empty()` | | O(1) |
-| `get_at(i)`、`set_at(i, v)` | 超出範圍丟 `std::out_of_range` | O(1) |
-| `operator[]`（兩個版本）、`begin()`/`end()` | 不檢查範圍 | O(1) |
+| `DynamicArray()` | An empty array; must not allocate memory | O(1) |
+| `insert_last(v)` | Append at the end | Amortized O(1) |
+| `delete_last()` | Delete and return the last element; throw `std::out_of_range` if the array is empty | Amortized O(1) |
+| `size()`, `capacity()`, `empty()` | | O(1) |
+| `get_at(i)`, `set_at(i, v)` | Throw `std::out_of_range` when out of range | O(1) |
+| `operator[]` (both versions), `begin()`/`end()` | No range check | O(1) |
 
-- 只有前 `size()` 個位置有物件，**多餘的 capacity 裡不可以有任何建構好的物件**（測試用 `Tracked` 逐步檢查）。
-- 被刪除的元素要真的被解構。Move-only 的元素（`std::unique_ptr`）也要能用。
+- Only the first `size()` slots hold objects: **the spare capacity must not contain any constructed object** (the tests check this step by step with `Tracked`).
+- Deleted elements must actually be destroyed. Move-only elements (`std::unique_ptr`) must work too.
 
-## Stage 2 — 攤提分析的契約
+## Stage 2 — The amortized-analysis contract
 
-`capacity()` 不綁定特定數值，但必須滿足：
+`capacity()` isn't tied to any particular value, but it must satisfy:
 
-1. 永遠 `size() ≤ capacity() ≤ 4·size() + 16`。
-2. **連續 n 次 `insert_last` 的元素搬動總次數（copy + move）≤ 5n。**
-3. 不管 `insert_last`、`delete_last` 怎麼交替（尤其在剛好滿、或剛好縮小的邊界），都不能發生反覆大量搬動（thrashing）。
+1. Always `size() ≤ capacity() ≤ 4·size() + 16`.
+2. **n consecutive `insert_last` calls move elements (copy + move) at most 5n times in total.**
+3. However `insert_last` and `delete_last` alternate (especially right at the boundary where the array is exactly full or has just shrunk), repeated mass moving (thrashing) must never happen.
 
-Lecture 2 的做法：滿了就擴大成 2 倍；`size` 掉到 capacity 的 1/4 才縮小一半。想清楚為什麼「掉到 1/2 就縮小」不行。
+Lecture 2's approach: when the array is full, grow it to 2 times its size; shrink it by half only once `size` drops to 1/4 of the capacity. Think through why "shrink as soon as it drops to 1/2" doesn't work.
 
-## Stage 3 — Value Semantics 與中間操作
+## Stage 3 — Value semantics and operations in the middle
 
-- Copy constructor、copy assignment（深拷貝，strong guarantee）、move constructor、move assignment（O(1)，`noexcept`，被搬走的物件 `size()` 為 0）。
-- `insert_at(i, v)`：在索引 `i` 之前插入，`0 ≤ i ≤ size()`。容量足夠時只搬動 `i` 之後的元素。
-- `delete_at(i)`：刪除並回傳第 `i` 個元素，一樣只搬動 `i` 之後的元素。
-- `i` 超出範圍丟 `std::out_of_range`，內容不變。
+```cpp
+// in class DynamicArray<T>
+DynamicArray(const DynamicArray& other);
+DynamicArray& operator=(const DynamicArray& other);
+DynamicArray(DynamicArray&& other);             // should be noexcept once implemented
+DynamicArray& operator=(DynamicArray&& other);  // should be noexcept once implemented
+
+void insert_at(std::size_t i, T value);
+T delete_at(std::size_t i);
+```
+
+- Copy constructor and copy assignment (deep copy, strong guarantee); move constructor and move assignment (O(1), `noexcept`, and the moved-from object's `size()` is 0).
+- `insert_at(i, v)`: insert before index `i`, `0 ≤ i ≤ size()`. When the capacity is sufficient, move only the elements after `i`.
+- `delete_at(i)`: delete and return element `i`, again moving only the elements after `i`.
+- If `i` is out of range, throw `std::out_of_range` and leave the contents unchanged.
 
 ## Stage 4 — Strong Exception Guarantee
 
-`insert_last` 要和 `std::vector::push_back` 一樣提供 strong guarantee：**元素的 copy 或 move 在擴容途中丟例外時，陣列的內容與 `size()` 完全不變**，也不可洩漏。
+`insert_last` must provide the strong guarantee, just like `std::vector::push_back`: **if an element's copy or move throws an exception partway through growing, the array's contents and `size()` stay exactly the same**, and nothing may leak.
 
-- 擴容時，如果元素的 move constructor 是 `noexcept`，就用 move（否則擴容退化成複製會很貴）；如果 move 可能丟例外，就要改用 copy（`std::move_if_noexcept`）。
-- 配置新記憶體要在動到舊資料之前，建好全部新元素再一次切換。
+- When growing, if the element's move constructor is `noexcept`, use move (otherwise growing degrades into copying, which is expensive); if move might throw, use copy instead (`std::move_if_noexcept`).
+- Allocate the new memory before touching the old data, and build all the new elements before switching over in one step.
 
-## 面試追問
+## Interview follow-ups
 
-1. 用 accounting method 說明 doubling 的攤提 O(1)：每次 `insert_last` 要存多少「錢」？
-2. 為什麼 shrink 門檻不能和 grow 門檻太接近？給一個具體的最壞操作序列。
-3. `std::vector::insert` 在中間插入時為什麼只提供 basic guarantee，尾端 `push_back` 卻是 strong？
-4. 為什麼有些實作不用 2 倍而用 1.5 倍？這跟 allocator 重複使用舊區塊有什麼關係？
+Once you're done, answer without looking at your code:
+
+1. Use the accounting method to explain why doubling gives amortized O(1): how much "money" does each `insert_last` have to save up?
+2. Why can't the shrink threshold be too close to the grow threshold? Give a concrete worst-case sequence of operations.
+3. Why does `std::vector::insert` in the middle provide only the basic guarantee, while `push_back` at the end provides the strong one?
+4. Why do some implementations grow by 1.5 times instead of 2? How does that relate to the allocator reusing old blocks?

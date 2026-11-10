@@ -1,6 +1,6 @@
 ---
-title: Rod Cutting、Unbounded Knapsack 與 Coin Change
-unit: 08 · Dynamic Programming II（PS8）
+title: Rod Cutting, Unbounded Knapsack, and Coin Change
+unit: 08 · Dynamic Programming II (PS8)
 source: 6.006 Lecture 18, Recitation 18
 pdf: materials/6.006/lectures/lec18.pdf
 read: materials/6.006/lectures/lec18.pdf, materials/6.006/recitations/rec18.pdf
@@ -8,42 +8,58 @@ kind: code
 minutes: 80
 ---
 
-# 0801 · Rod Cutting、Unbounded Knapsack 與 Coin Change
+# 0801 · Rod Cutting, Unbounded Knapsack, and Coin Change
 
-> **實務上為什麼會遇到**：買 reserved capacity、拼湊符合需求的規格、換零錢，都是「同一種東西可以重複用」的整數分解。子問題就是一個比目前小的整數，所以時間是 pseudopolynomial：資料多大不是看有幾個數字，而是看**數字本身多大**。
+**Based on:** [Lecture 18: Dynamic Programming, Part 4: Rods, Subsetsums, Pseudopolynomial notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/mit6_006s20_lec18.pdf) · **Read first:** [Lecture 18: Dynamic Programming, Part 4: Rods, Subsetsums, Pseudopolynomial notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/mit6_006s20_lec18.pdf), [Recitation 18 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/e88f4499b351ab82ebf07c4de2859272_MIT6_006S20_r18.pdf)
 
-一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** buying reserved capacity, piecing together a configuration that meets a requirement, and making change are all integer decompositions in which "the same kind of thing can be used again". A subproblem is just an integer smaller than the current one, so the running time is pseudopolynomial: how big the data is depends not on how many numbers there are but on **how large the numbers themselves are**.
 
-## Stage 1 — Rod Cutting 的最大價值
+## Your task
 
-`std::int64_t rod_cut_value(std::span<const std::int64_t> prices)`：`prices[l]` 是長度 `l` 的一段能賣的價錢（`prices[l] ≥ 0`，`prices[0]` 不使用），整根長度 `L = prices.size() − 1`，切成整數長度的段，回傳最大總價。空輸入或 `L == 0` 回傳 0。O(L²) 時間。
+Lecture 18 solves rod cutting, and Recitation 18 solves the unbounded knapsack. Here you also recover the cuts, solve coin change three ways (fewest coins, and two kinds of counts), and buy capacity that must cover a demand rather than fit within a limit.
 
-單位長度最貴的切法是**錯的**。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 2 — 切法
+Read one stage at a time, and finish it before reading on.
 
-`std::vector<std::size_t> rod_cut_pieces(std::span<const std::int64_t> prices)`：回傳每一段的長度（順序不拘），總和要等於 `L`，總價要是最大值。
+## Stage 1 — The best Rod Cutting value
 
-## Stage 3 — 只有某些長度能賣（Unbounded Knapsack）
+```cpp
+std::int64_t rod_cut_value(std::span<const std::int64_t> prices);
+```
+
+`std::int64_t rod_cut_value(std::span<const std::int64_t> prices)`: `prices[l]` is the price that a piece of length `l` sells for (`prices[l] ≥ 0`, and `prices[0]` is unused). The whole rod has length `L = prices.size() − 1`; cut it into pieces of integer length and return the highest total price. Return 0 for empty input or when `L == 0`. O(L²) time.
+
+Cutting into the pieces with the highest price per unit length is **wrong**.
+
+## Stage 2 — The cuts
+
+```cpp
+std::vector<std::size_t> rod_cut_pieces(std::span<const std::int64_t> prices);
+```
+
+`std::vector<std::size_t> rod_cut_pieces(std::span<const std::int64_t> prices)`: return the length of each piece (in any order). The lengths must add up to `L`, and the total price must be the maximum. Return an empty vector for empty input or when `L == 0`.
+
+## Stage 3 — Only some lengths can be sold (Unbounded Knapsack)
 
 ```cpp
 struct Item { std::size_t size; std::int64_t value; };   // size >= 1, value >= 0
 std::int64_t unbounded_knapsack(std::span<const Item> items, std::size_t capacity);
 ```
 
-每種 item 可以用任意多次，總 size 不超過 `capacity`，回傳最大總 value。O(n·capacity) 時間，O(capacity) 記憶體。
+Each kind of item can be used any number of times, and the total size must not exceed `capacity`. Return the highest total value. O(n·capacity) time, O(capacity) memory.
 
-## Stage 4 — Coin Change 兩種計數
+## Stage 4 — Coin Change, with two kinds of counting
 
 ```cpp
-std::optional<std::int64_t> min_coins(std::span<const int> coins, int amount);  // 湊不出來時 nullopt
-std::uint64_t count_change_ways(std::span<const int> coins, int amount);        // 不計順序
-std::uint64_t count_ordered_ways(std::span<const int> coins, int amount);       // 計順序
+std::optional<std::int64_t> min_coins(std::span<const int> coins, int amount);  // nullopt when the amount can't be made
+std::uint64_t count_change_ways(std::span<const int> coins, int amount);        // order doesn't matter
+std::uint64_t count_ordered_ways(std::span<const int> coins, int amount);       // order matters
 ```
 
-面額皆為正，同一種面額可重複使用，`amount ≥ 0`（`amount == 0` 時最少 0 枚，兩種方法數都是 1）。兩個計數函式的差別只在迴圈順序，想清楚為什麼。
+Every denomination is positive, each denomination can be used repeatedly, and `amount ≥ 0` (when `amount == 0`, the minimum is 0 coins and both counts are 1). The two counting functions differ only in the order of their loops; think through why.
 
-## Stage 5 — 實務延伸：買足夠的產能
+## Stage 5 — Real-world extension: buying enough capacity
 
 ```cpp
 struct Offer { std::int64_t units; std::int64_t price; };   // units >= 1, price >= 0
@@ -52,10 +68,12 @@ struct Purchase { std::int64_t cost; std::vector<std::int64_t> counts; };
 std::optional<Purchase> cheapest_capacity(std::span<const Offer> offers, std::int64_t demand);
 ```
 
-每種方案可以買任意多份，總 `units` **至少**要達到 `demand`。回傳最低成本和每種方案買幾份（`counts[i]` 對應 `offers[i]`，買超過也可以）。`demand` 為 0 時成本 0、全部買 0 份；沒有 offer 又需要買時回傳 `std::nullopt`。
+You can buy any number of copies of each offer, and the total `units` must reach **at least** `demand`. Return the lowest cost and how many copies of each offer to buy (`counts[i]` corresponds to `offers[i]`, and buying more than the demand is fine). When `demand` is 0, the cost is 0 and every count is 0; when you need to buy something but there are no offers, return `std::nullopt`.
 
-## 面試追問
+## Interview follow-ups
 
-1. Rod Cutting 的 O(L²) 算 polynomial 嗎？Stage 3 的 O(n·capacity) 呢？差別在哪？
-2. 什麼面額系統（例如現行硬幣）下 greedy 剛好最佳？怎麼判斷？
-3. `count_change_ways` 和 `count_ordered_ways` 把內外迴圈對調，對應的子問題定義分別是什麼？
+Once you're done, answer without looking at your code:
+
+1. Is Rod Cutting's O(L²) polynomial? What about O(n·capacity) in Stage 3? Where's the difference?
+2. For which coin systems (such as the coins in circulation today) does greedy happen to be optimal? How can you tell?
+3. `count_change_ways` and `count_ordered_ways` swap the inner and outer loops. What subproblem definition does each one correspond to?

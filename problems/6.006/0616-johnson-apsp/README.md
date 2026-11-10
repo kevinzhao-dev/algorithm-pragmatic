@@ -1,6 +1,6 @@
 ---
-title: Johnson's Algorithm（全點對最短路徑與路由表）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: Johnson's Algorithm (all-pairs shortest paths and routing tables)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 PS6 Problem 6-6, Lecture 14
 pdf: materials/6.006/psets/ps6/questions.pdf
 answer: materials/6.006/psets/ps6/solutions.pdf
@@ -11,44 +11,83 @@ minutes: 110
 
 # 0616 · Johnson's Algorithm
 
-> **實務上為什麼會遇到**：路由器的 forwarding table、機房間的流量工程、地圖服務的距離快取，都需要「任兩點」的答案。Johnson 把帶負權重的稀疏圖化成 V 次 Dijkstra，比 Floyd-Warshall 的 V³ 省非常多。
+**Original problem:** [Problem Set 6 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0cb5c705752261af9da744c22925a136_MIT6_006S20_ps6_questions.pdf) · **Read first:** [Lecture 14: ASP & Johnson’s Algorithm notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/7d7d5c35490f41b7b037cafbda7019ad_MIT6_006S20_lec14.pdf), [Recitation 14 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6027e2a155c948937fdfb93981f7070c_MIT6_006S20_r14.pdf)
 
-輸入是邊的清單，`n` 個頂點（`0 … n-1`），權重可以是負的，可以有平行邊和 self-loop。邊的兩端保證合法。
+> **Why this comes up in practice:** a router's forwarding table, traffic engineering between data centers, and a map service's distance cache all need answers for any pair of points. Johnson turns a sparse graph with negative weights into V runs of Dijkstra, which saves a great deal over the V³ of Floyd-Warshall.
+
+## Original problem
+
+6.006 PS6 Problem 6-6 is a coding task: Johnson's algorithm from Lecture 14, computing shortest-path weights between all pairs of vertices of an arbitrary weighted directed graph G. It receives n, the number of vertices (labeled 0 through n − 1), plus a tuple S of edges given as triples (u, v, w) for u → v with weight w. It returns an n × n table D, a tuple of n tuples, with D[u][v] = δ(u, v), or None when the graph has a cycle of negative total weight.
+
+Implement it as `johnson(n, S)` in the Python template, which already ships Bellman-Ford and a binary-heap Dijkstra adapted from recitation; reusing them means building your own adjacency lists and weight function.
+
+## Your task
+
+The input is a list of edges over `n` vertices (`0 … n-1`). Weights may be negative, and there may be parallel edges and self-loops. Both ends of every edge are guaranteed to be valid.
 
 ```cpp
 struct Edge { int from; int to; std::int64_t weight; };
 inline constexpr std::int64_t kUnreachable = std::numeric_limits<std::int64_t>::max();
 ```
 
-一次只看一關，做完再往下讀。
+Stage 1 computes the potentials, Stage 2 is the original problem, and Stage 3 goes further and builds a routing table with next hops on top of it.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
 
 ## Stage 1 — Potential
 
-`johnson_potentials(n, edges)`：回傳長度為 `n` 的 `h`，使得**每條邊**都滿足 `weight + h[from] - h[to] >= 0`。圖裡任何地方有負環（不管從哪裡走得到）時回傳 `std::nullopt`。
+```cpp
+std::optional<std::vector<std::int64_t>> johnson_potentials(int n, std::span<const Edge> edges);
+```
 
-要 O(V · E)。
+`johnson_potentials(n, edges)`: return an `h` of length `n` such that **every edge** satisfies `weight + h[from] - h[to] >= 0`. Return `std::nullopt` if there is a negative cycle anywhere in the graph (no matter where it can be reached from).
 
-## Stage 2 — 全點對最短路徑
+Must run in O(V · E).
 
-`johnson(n, edges)`：回傳 `n × n` 的矩陣 `D`，`D[u][v]` 是 `u` 到 `v` 的最短路徑權重，到不了是 `kUnreachable`，`D[u][u]` 是 0。有負環時回傳 `std::nullopt`。
+## Stage 2 — All-pairs shortest paths
 
-要 O(V² log V + V · E)。稀疏圖上要明顯快過 O(V³) 和 V 次 Bellman-Ford。
+```cpp
+std::optional<std::vector<std::vector<std::int64_t>>> johnson(int n, std::span<const Edge> edges);
+```
 
-## Stage 3 — 實務延伸：路由表
+`johnson(n, edges)`: return an `n × n` matrix `D` in which `D[u][v]` is the shortest-path weight from `u` to `v`, or `kUnreachable` if `v` can't be reached, and `D[u][u]` is 0. Return `std::nullopt` if there is a negative cycle.
 
-做一個 `RoutingTable`：
+Must run in O(V² log V + V · E). On sparse graphs it must be clearly faster than O(V³) and than V runs of Bellman-Ford.
 
-- `static std::optional<RoutingTable> build(n, edges)`：有負環時回傳 `std::nullopt`。
-- `distance(from, to)`：同 Stage 2，O(1)。
-- `next_hop(from, to)`：從 `from` 要往 `to` 時的下一個頂點；`from == to` 或到不了時回傳 `std::nullopt`。O(1)。
-- `route(from, to)`：沿著 `next_hop` 一跳一跳走出來的完整路線（含兩端）；到不了回傳 `std::nullopt`，`from == to` 時只有一個頂點。
+## Stage 3 — Real-world extension: a routing table
 
-頂點不存在時丟 `std::out_of_range`。
+```cpp
+class RoutingTable {
+public:
+    static std::optional<RoutingTable> build(int n, std::span<const Edge> edges);
 
-路由器只知道自己的下一跳，所以 **從任何頂點開始一跳一跳走，都必須真的走到 `to`，而且路徑總權重等於 `distance(from, to)`**。圖裡可能有權重總和為 0 的環。
+    std::int64_t distance(int from, int to) const;
+    std::optional<int> next_hop(int from, int to) const;
+    std::optional<std::vector<int>> route(int from, int to) const;
+};
+```
 
-## 面試追問
+Build a `RoutingTable`:
 
-1. 為什麼加上超級節點算出來的 `h` 一定能讓所有權重變成非負？為什麼不能直接把最小權重加到每條邊上？
-2. 改權重之後，為什麼所有最短路徑都不變？要怎麼從 `D'` 換回 `D`？
-3. 有 0 權重的環時，如果每個頂點各自獨立挑一條最短路徑，下一跳可能會出什麼事？你靠什麼避開的？
+- `static std::optional<RoutingTable> build(n, edges)`: return `std::nullopt` if there is a negative cycle.
+- `distance(from, to)`: the same as Stage 2, in O(1).
+- `next_hop(from, to)`: the next vertex on the way from `from` to `to`; return `std::nullopt` if `from == to` or `to` can't be reached. O(1).
+- `route(from, to)`: the full route you get by following `next_hop` one hop at a time (both ends included); return `std::nullopt` if `to` can't be reached, and a single vertex when `from == to`.
+
+Throw `std::out_of_range` if a vertex doesn't exist.
+
+A router only knows its own next hop, so **following next hops one at a time from any vertex must actually arrive at `to`, and the path's total weight must equal `distance(from, to)`**. The graph may contain cycles whose total weight is 0.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does the `h` computed with an added super node always make every weight nonnegative? Why can't you just add the minimum weight to every edge?
+2. Why does reweighting leave every shortest path unchanged? How do you convert `D'` back into `D`?
+3. When there are zero-weight cycles, what can go wrong with the next hops if every vertex independently picks a shortest path of its own? What do you rely on to avoid that?
+
+---
+
+**Official solution:** [Problem Set 6 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9073af3b8151002c5f63d06dc7ac961e_MIT6_006S20_ps6_solutions.pdf). Read it after you finish.

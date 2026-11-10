@@ -1,6 +1,6 @@
 ---
-title: 兩個維護窗口（有解就給排法、沒解就給證據）
-unit: 05 · Graph Search（PS5）
+title: Two Maintenance Windows (a schedule if one exists, evidence if not)
+unit: 05 · Graph Search (PS5)
 source: 6.006 PS5 Problem 5-3
 pdf: materials/6.006/psets/ps5/questions.pdf
 answer: materials/6.006/psets/ps5/solutions.pdf
@@ -9,43 +9,86 @@ kind: code
 minutes: 80
 ---
 
-# 0513 · 兩個維護窗口
+# 0513 · Two Maintenance Windows
 
-> **實務上為什麼會遇到**：共用主機的服務不能同批重啟、會互相鎖死的 migration 不能同時跑。排不下的時候，老闆要的不是「不行」兩個字，而是「這幾個互相衝突，所以不行」。
+**Original problem:** [Problem Set 5 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/8c155b28c87cc1fe3f506de2036bdf1b_MIT6_006S20_ps5_questions.pdf) · **Read first:** [Lecture 9: Breadth-First Search notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/196a95604877d326c6586e60477b59d4_MIT6_006S20_lec9.pdf), [Recitation 9 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6afd7e9a85d7d36e204533569f9fccf6_MIT6_006S20_r09.pdf)
 
-你要在兩個維護窗口內重啟所有服務。輸入是一串衝突：
+> **Why this comes up in practice:** services that share a host can't be restarted in the same batch, and migrations that would deadlock each other can't run at the same time. When things don't fit, your boss doesn't want a flat "no"; they want "these ones conflict with each other, so no."
+
+## Original problem
+
+6.006 PS5 Problem 5-3 has two androids planning an engagement party for their robot friends, except that many pairs of those friends short-circuit when they share a room. So they consider splitting the guests across two parties, with each friend attending exactly one and no short-circuiting pair at the same party. Three friends who short-circuit pairwise already make that impossible.
+
+From the list of the n conflicting pairs, give an O(n)-time algorithm that decides whether such a split exists.
+
+## Your task
+
+You must restart every service within two maintenance windows. The input is a list of conflicts:
 
 ```cpp
 using Conflict = std::pair<std::string, std::string>;
 ```
 
-`{a, b}` 代表 `a` 和 `b` 不能在同一個窗口重啟。服務名稱是任意字串（可以是空字串、可以很長），**只出現在衝突列表裡的服務才算數**，事先不知道有幾個。同一對可以重複出現或反過來出現；`{x, x}` 代表 `x` 跟自己衝突，永遠排不下。
+`{a, b}` means `a` and `b` must not restart in the same window. Service names are arbitrary strings (they can be empty, and they can be long). **Only services that appear in the conflict list count**, and you don't know in advance how many there are. The same pair may appear more than once, or in reverse order; `{x, x}` means `x` conflicts with itself, so it can never be scheduled.
 
-`n` 是衝突筆數，服務名稱的長度視為常數。一次只看一關，做完再往下讀。
+`n` is the number of conflicts, and the length of a service name counts as a constant.
 
-## Stage 1 — 排得下嗎
+Stage 1 is the original yes-or-no question. Stage 2 also asks for the schedule or, failing that, an odd cycle as proof, and Stage 3 finds the first conflict that makes scheduling impossible.
 
-`can_fit_two_windows(conflicts)`：所有服務能不能分到兩個窗口，且任一衝突的兩端都不在同一窗口。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-期望 O(n)。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 交出排法或證據
+## Stage 1 — Does it fit?
 
-`plan_two_windows(conflicts)` 回傳 `std::variant<Partition, OddCycle>`：
+```cpp
+bool can_fit_two_windows(std::span<const Conflict> conflicts);
+```
 
-- `Partition{first, second}`：排得下時，每個服務恰好出現在其中一個裡面，同一窗口裡沒有衝突。
-- `OddCycle{members}`：排不下時，`members` 是**不重複**的服務名稱，長度為奇數，相鄰兩個（含最後接回第一個）都有衝突。`{x, x}` 的情況回傳只有 `x` 的環。
+`can_fit_two_windows(conflicts)`: whether all the services can be split between the two windows so that the two ends of every conflict are in different windows.
 
-期望 O(n)。
+Expected O(n).
 
-## Stage 3 — 哪一筆壓垮的
+## Stage 2 — A schedule or the evidence
 
-衝突是按時間順序一筆一筆發現的。`first_breaking_conflict(conflicts)`：回傳最小的索引 `i`，使得前 `i + 1` 筆衝突已經排不下；全部都排得下回傳 `std::nullopt`。
+```cpp
+struct Partition {
+    std::vector<std::string> first;
+    std::vector<std::string> second;
+};
 
-一筆一筆重做是 O(n²)，你要做到 **O(n log n)** 或更好。
+struct OddCycle {
+    std::vector<std::string> members;
+};
 
-## 面試追問
+std::variant<Partition, OddCycle> plan_two_windows(std::span<const Conflict> conflicts);
+```
 
-1. 為什麼「沒有奇環」等價於「排得下」？你的演算法哪一步用到了這件事？
-2. 如果 conflict 是持續串流進來，每來一筆都要立刻回答「還排得下嗎」，你會用什麼資料結構？
-3. 想讓兩個窗口的服務數量盡量接近，這題會變成什麼問題？複雜度差多少？
+`plan_two_windows(conflicts)` returns `std::variant<Partition, OddCycle>`:
+
+- `Partition{first, second}`: when the services fit, each service appears exactly once, in one of the two, and no window contains a conflict.
+- `OddCycle{members}`: when they don't fit, `members` holds **distinct** service names, has odd length, and every two adjacent members conflict (including the last one with the first). For `{x, x}`, return the cycle that contains only `x`.
+
+Expected O(n).
+
+## Stage 3 — Which conflict broke it
+
+```cpp
+std::optional<std::size_t> first_breaking_conflict(std::span<const Conflict> conflicts);
+```
+
+Conflicts are discovered one at a time, in chronological order. `first_breaking_conflict(conflicts)`: return the smallest index `i` such that the first `i + 1` conflicts can no longer be scheduled, or `std::nullopt` if all of them can.
+
+Redoing the check after every conflict is O(n²). You must achieve **O(n log n)** or better.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is having no odd cycle equivalent to fitting into two windows? Which step of your algorithm relies on this?
+2. If conflicts stream in continuously and you must answer "does it still fit?" as soon as each one arrives, what data structure would you use?
+3. If you also wanted the two windows to hold as close to the same number of services as possible, what problem would this become? How much would the complexity change?
+
+---
+
+**Official solution:** [Problem Set 5 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/23d4cf5421c77bb55b3735f7e8f70dfe_MIT6_006S20_ps5_solutions.pdf). Read it after you finish.

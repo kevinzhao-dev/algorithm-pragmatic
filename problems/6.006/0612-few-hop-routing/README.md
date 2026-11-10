@@ -1,6 +1,6 @@
 ---
-title: 距離向量路由（幾跳就收斂的最短路徑）
-unit: 06 · Weighted Shortest Paths（PS6）
+title: Distance-Vector Routing (shortest paths that converge in a few hops)
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 PS6 Problem 6-2
 pdf: materials/6.006/psets/ps6/questions.pdf
 answer: materials/6.006/psets/ps6/solutions.pdf
@@ -9,39 +9,72 @@ kind: code
 minutes: 70
 ---
 
-# 0612 · 距離向量路由
+# 0612 · Distance-Vector Routing
 
-> **實務上為什麼會遇到**：Distance-vector 協定（RIP 這一類）就是一輪一輪交換路由表的 Bellman-Ford，真實網路的直徑很小，所以幾輪就收斂了。「最多轉 k 次機的最便宜機票」也是同一種問題，而且換個寫法答案就會錯。
+**Original problem:** [Problem Set 6 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0cb5c705752261af9da744c22925a136_MIT6_006S20_ps6_questions.pdf) · **Read first:** [Lecture 12: Bellman-Ford notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/2430d7903a5529451d80c17f89a41fe8_MIT6_006S20_lec12.pdf), [Recitation 12 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1a34924a2ee4e08c580c2268f8e854ee_MIT6_006S20_r12.pdf)
 
-輸入是邊的清單，`n` 個頂點（`0 … n-1`），權重可以是負的。起點不存在時丟 `std::out_of_range`。
+> **Why this comes up in practice:** distance-vector protocols (the RIP family) are Bellman-Ford with routing tables exchanged round by round, and real networks have small diameters, so they converge within a few rounds. "The cheapest flight with at most k connections" is the same kind of problem, and writing it a slightly different way gives wrong answers.
+
+## Original problem
+
+6.006 PS6 Problem 6-2 takes a weighted directed graph G = (V, E, w) and a source s ∈ V, and promises that each vertex v ∈ V can be reached from s by a minimum-weight path of at most k edges.
+
+Give an O(|V| + k|E|)-time algorithm that computes δ(s, v) for every vertex v.
+
+## Your task
+
+The input is a list of edges over `n` vertices (`0 … n-1`), and weights may be negative. Throw `std::out_of_range` when the source doesn't exist.
 
 ```cpp
 struct Edge { int from; int to; std::int64_t weight; };
 inline constexpr std::int64_t kUnreachable = std::numeric_limits<std::int64_t>::max();
 ```
 
-一次只看一關，做完再往下讀。
+Stage 1 is the original problem, and `k` is not given to you. Stage 2 caps the number of hops instead, and Stage 3 measures `k` itself.
 
-## Stage 1 — 不知道 k 的收斂
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-保證：對每個從 `s` 可達的頂點 `v`，都存在某條 min-weight path 只用 `k` 條邊以內。**`k` 不會告訴你**，但它可能遠小於 V。
+Read one stage at a time, and finish it before reading on.
 
-`converge_routes(n, edges, s)`：回傳 `dist`，到不了是 `kUnreachable`。要 O(V + k · E)，圖有上百萬條邊、`k` 只有幾十時不能跑滿 V 輪。
+## Stage 1 — Converging without knowing k
 
-## Stage 2 — 跳數限制
+```cpp
+std::vector<std::int64_t> converge_routes(int n, std::span<const Edge> edges, int source);
+```
 
-`hop_limited_routes(n, edges, s, hops)`：回傳「最多走 `hops` 條邊」的最小權重。這裡**沒有 Stage 1 的保證**，也可能有負環，走法可以重複經過頂點（是 walk）；`hops == 0` 時只有 `s` 是 0，其他都是 `kUnreachable`。
+Guarantee: for every vertex `v` reachable from `s`, some min-weight path uses at most `k` edges. **You are not told `k`**, but it may be far smaller than V.
 
-要 O(hops · (V + E))。
+`converge_routes(n, edges, s)`: return `dist`, with `kUnreachable` for unreachable vertices. Must run in O(V + k · E): when the graph has millions of edges and `k` is only a few dozen, you can't run all V rounds.
 
-## Stage 3 — 量測收斂需要的跳數
+## Stage 2 — A hop limit
 
-`convergence_hops(n, edges, s)`：保證同 Stage 1，回傳最小的 `k`，使得每個可達頂點都有一條最短路徑只用 `k` 條邊以內。只有 `s` 自己可達時回傳 0。
+```cpp
+std::vector<std::int64_t> hop_limited_routes(int n, std::span<const Edge> edges, int source,
+                                             int hops);
+```
 
-要 O(V + k · E)。
+`hop_limited_routes(n, edges, s, hops)`: return the minimum weights using at most `hops` edges. **Stage 1's guarantee does not hold here**, there may be negative cycles, and a route may revisit vertices (it is a walk). When `hops == 0`, only `s` is 0, and every other vertex is `kUnreachable`.
 
-## 面試追問
+Must run in O(hops · (V + E)).
 
-1. Stage 1 為什麼可以用「這一輪沒有任何更新就停」當條件？如果 `k` 本來就知道，可以少做什麼？
-2. 為什麼 Stage 2 不能直接用 Stage 1 的迴圈做 `hops` 輪？舉一個具體的小例子。
-3. 真實的 RIP 為什麼要有跳數上限？count-to-infinity 跟這裡的負環有什麼相似之處？
+## Stage 3 — Measuring the hops needed to converge
+
+```cpp
+int convergence_hops(int n, std::span<const Edge> edges, int source);
+```
+
+`convergence_hops(n, edges, s)`: under the same guarantee as Stage 1, return the smallest `k` such that every reachable vertex has a shortest path that uses at most `k` edges. Return 0 when `s` is the only reachable vertex.
+
+Must run in O(V + k · E).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why can Stage 1 stop as soon as a round makes no updates? If you already knew `k`, what work could you skip?
+2. Why can't Stage 2 simply run Stage 1's loop for `hops` rounds? Give a small concrete example.
+3. Why does real RIP have a hop limit? What does count-to-infinity have in common with the negative cycles here?
+
+---
+
+**Official solution:** [Problem Set 6 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9073af3b8151002c5f63d06dc7ac961e_MIT6_006S20_ps6_solutions.pdf). Read it after you finish.

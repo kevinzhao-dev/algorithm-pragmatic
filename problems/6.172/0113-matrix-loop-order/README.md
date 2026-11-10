@@ -1,24 +1,67 @@
 ---
-title: 矩陣乘法的迴圈順序
-unit: 01 · C++ 基本功與工具（HW1）
-source: 6.172 HW1 §6（Write-up 9–10）、Lecture 1
+title: Loop Order in Matrix Multiplication
+unit: 01 · C++ Fundamentals and Tools (HW1)
+source: 6.172 HW1 §6 (Write-up 9–10), Lecture 1
 pdf: materials/6.172/homework/hw01/handout.pdf
 read: materials/6.172/lectures/lec01.pdf
 kind: perf
 minutes: 90
 ---
 
-# 0113 · 矩陣乘法的迴圈順序
+# 0113 · Loop Order in Matrix Multiplication
 
-> **實務上為什麼會遇到**：線性代數、影像處理、embedding 比對的最內層迴圈，換個巢狀順序、不動任何演算法，就能快十倍。這是第一堂課用來嚇人的例子，也是面試官最常問「為什麼」的那個。
+**Original problem:** [HW1: Basic Tools, C Primer](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/2724d8594cb413754669fc4e9c6ce7db_MIT6_172F18hw1.pdf) · **Read first:** [Introduction & Matrix Multiplication](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/d0c73dd51c79b95196a2e6faa824e1b4_MIT6_172F18_lec1.pdf)
 
-## Stage 1 — RAII 矩陣
+> **Why this comes up in practice:** in the innermost loops of linear algebra, image processing, and embedding comparison, changing the nesting order without touching the algorithm can make the code ten times faster. It's the example the first lecture uses to shock you, and the one interviewers most often ask "why" about.
 
-`Matrix(rows, cols)`，元素是 `double`，row-major 連續存放，**建構時全部歸零**（HW1 的 bug 之一就是忘了初始化）。`operator()(r, c)` 存取元素，`row(r)` 回傳該列的 `std::span`，`operator==` 比較大小和內容。
+## Original problem
 
-`multiply(a, b)`：回傳 `C = A × B`（`a.rows()` × `b.cols()`）。維度不合（`a.cols() != b.rows()`）丟 `std::invalid_argument`。任一維度為 0 的矩陣也要能處理。
+6.172 HW1 §6 times the C matrix-multiply program from §5. Timings on the shared course machines, or on a small VM that is also running your editor, are noisy, so the handout has you queue performance runs on a dedicated machine with the course's `awsrun` utility. Then:
 
-## Stage 2 — 六種迴圈順序
+- Grow all the matrices to 1000 × 1000 and time the program as it is. Its innermost loop reads `A` in order but strides across `B`.
+- Exchange the `j` and `k` loops, which makes the innermost loop read consecutive elements of a row of `B` and update consecutive elements of a row of `C`; time it again and confirm the speedup.
+- Time a debug build (`-O0`) and an optimized build (`-O3`), and confirm that the optimized one is faster.
+
+The write-ups:
+
+- **Write-up 9:** the execution times before and after the loop swap.
+- **Write-up 10:** the execution times of the `-O0` debug build and of the `-O3` build.
+
+Lecture 1 tells the same story at a larger scale: it multiplies 4096 × 4096 matrices, times all six loop orders (the order alone changes the running time by a factor of 18), explains the gap with cache lines and the row-major layout, and then measures Clang's optimization levels.
+
+## Your task
+
+This exercise rebuilds that experiment in C++: you write an RAII matrix, run the multiplication in all six loop orders, rank the orders with a small cache model, and let perf tests check the speedups inside a single executable instead of on a dedicated timing machine.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — RAII matrix
+
+```cpp
+class Matrix {
+public:
+    Matrix(std::size_t rows, std::size_t cols);
+
+    std::size_t rows() const;
+    std::size_t cols() const;
+
+    double& operator()(std::size_t r, std::size_t c);
+    double operator()(std::size_t r, std::size_t c) const;
+
+    std::span<double> row(std::size_t r);
+    std::span<const double> row(std::size_t r) const;
+
+    friend bool operator==(const Matrix& a, const Matrix& b);
+};
+
+Matrix multiply(const Matrix& a, const Matrix& b);
+```
+
+`Matrix(rows, cols)` holds `double` elements stored contiguously in row-major order, and **sets every element to zero on construction** (one of HW1's bugs is a forgotten initialization). `operator()(r, c)` accesses an element, `row(r)` returns that row as a `std::span`, and `operator==` compares the shapes and the contents.
+
+`multiply(a, b)`: return `C = A × B` (`a.rows()` × `b.cols()`). Throw `std::invalid_argument` when the dimensions don't match (`a.cols() != b.rows()`). Matrices with a dimension of 0 must work too.
+
+## Stage 2 — Six loop orders
 
 ```cpp
 enum class LoopOrder { IJK, IKJ, JIK, JKI, KIJ, KJI };
@@ -30,29 +73,36 @@ void for_each_index_triple(std::size_t rows, std::size_t cols, std::size_t depth
 Matrix multiply_ordered(const Matrix& a, const Matrix& b, LoopOrder order);
 ```
 
-`for_each_index_triple` 依 `order` 的巢狀順序呼叫 `body(i, j, k)`，`i ∈ [0, rows)`、`j ∈ [0, cols)`、`k ∈ [0, depth)`。例如 `IKJ` 是 `for i, for k, for j`。
+`for_each_index_triple` calls `body(i, j, k)` in the nesting order that `order` names, with `i ∈ [0, rows)`, `j ∈ [0, cols)`, and `k ∈ [0, depth)`. For example, `IKJ` means `for i, for k, for j`.
 
-`multiply_ordered` 用這個函式實作，六種順序結果都要相同（對應 `a.rows()`、`b.cols()`、`a.cols()`）。
+Implement `multiply_ordered` with this function. All six orders must give the same result (the three extents correspond to `a.rows()`, `b.cols()`, and `a.cols()`). Like `multiply`, it throws `std::invalid_argument` when the dimensions don't match.
 
-## Stage 3 — 用 cache 模型解釋差異
+## Stage 3 — Explaining the difference with a cache model
 
-`std::vector<LoopOrder> rank_by_cache_misses(n, line_bytes, sets, ways)`：對 `n × n × n` 的乘法，用 `MiniCache`（`support/mini_cache.hpp`）餵入位址序列，回傳**由 miss 最少到最多**的六種順序。
+```cpp
+std::vector<LoopOrder> rank_by_cache_misses(std::size_t n, std::size_t line_bytes,
+                                            std::size_t sets, std::size_t ways);
+```
 
-位址模型：`double` 占 8 byte；`A` 從位址 0、`B` 從 `1<<30`、`C` 從 `2<<30` 開始，都是 row-major。每執行一次最內層的 `C[i][j] += A[i][k] * B[k][j]`，依序存取 `C[i][j]`、`A[i][k]`、`B[k][j]`、`C[i][j]`。
+`std::vector<LoopOrder> rank_by_cache_misses(n, line_bytes, sets, ways)`: for an `n × n × n` multiplication, feed the address sequence into a `MiniCache` (`support/mini_cache.hpp`) and return the six orders **from the fewest misses to the most**.
 
-跑完想清楚：最快的兩個順序有什麼共同點？最慢的兩個呢？
+Address model: a `double` takes 8 bytes; `A` starts at address 0, `B` at `1<<30`, and `C` at `2<<30`, all in row-major order. Each execution of the innermost `C[i][j] += A[i][k] * B[k][j]` accesses `C[i][j]`, `A[i][k]`, `B[k][j]`, and `C[i][j]`, in that order.
 
-## Stage 4 — 量真實的時間
+Once it runs, think it through: what do the two fastest orders have in common? What about the two slowest?
 
-測試用 `n = 512` 的 `multiply_ordered` 比較：
+## Stage 4 — Measuring real time
 
-- `IKJ` 至少比 `IJK` 快 4 倍。
-- `IKJ` 至少比同一段邏輯關掉最佳化的版本（`-O0` 的效果，用 `[[clang::optnone]]` 在同一個執行檔裡做 baseline）快 4 倍（對應 HW1 Write-up 10）。
+The tests time `multiply_ordered` with `n = 512` and check that:
 
-自己試試把 `body` 用 `std::function` 傳，看 ratio 掉到多少（為什麼？）。
+- `IKJ` is at least 4 times faster than `IJK`.
+- `IKJ` is at least 4 times faster than the same logic with optimization turned off (the effect of `-O0`, reproduced inside the same executable by an `[[clang::optnone]]` baseline). This corresponds to HW1 Write-up 10.
 
-## 面試追問
+Try passing `body` as a `std::function` yourself, and see how far the ratio drops (why?).
 
-1. 為什麼 IKJ 比 IJK 快這麼多，光靠 cache 解釋夠嗎？（提示：最內層能不能向量化？）
-2. Stage 3 的模型是位址層級的，沒有 hardware prefetcher。真實機器上 JKI 比模型預測更慘還是更好？
-3. 如果 `n` 大到比 L2 還大，你下一步會做什麼？（提示：blocking／cache-oblivious）
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is IKJ so much faster than IJK? Is the cache alone enough to explain it? (Hint: can the innermost loop be vectorized?)
+2. Stage 3's model works at the address level and has no hardware prefetcher. On a real machine, does JKI do worse or better than the model predicts?
+3. If `n` grows so large that the matrices don't fit in L2, what would you do next? (Hint: blocking/cache-oblivious.)

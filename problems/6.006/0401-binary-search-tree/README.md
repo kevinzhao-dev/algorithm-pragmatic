@@ -1,6 +1,6 @@
 ---
-title: Binary Tree 與 Traversal Order
-unit: 04 · Trees & Heaps（PS4）
+title: Binary Tree and Traversal Order
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 Lecture 6, Recitation 6
 pdf: materials/6.006/recitations/rec06.pdf
 read: materials/6.006/lectures/lec06.pdf
@@ -8,59 +8,153 @@ kind: code
 minutes: 100
 ---
 
-# 0401 · Binary Tree 與 Traversal Order
+# 0401 · Binary Tree and Traversal Order
 
-> **實務上為什麼會遇到**：`std::map`、資料庫的 B+Tree、OS 的 VMA tree 都建立在同一個想法上：節點的中序走訪定義了順序，把「改變集合」化為局部的指標操作。這題把這套基本功練到不用想。
+**Based on:** [Recitation 6 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/e215840fd7b0e8cb07916a65c17252b2_MIT6_006S20_r06.pdf) · **Read first:** [Lecture 6: Binary Trees, Part 1 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/376714cc85c6c784d90eec9c575ec027_MIT6_006S20_lec6.pdf)
 
-這題是之後 AVL、Set、Sequence 的共同基礎。實作有擁有權的 `BinaryTree<T>`（節點含 `parent`、`left`、`right`），操作全部用 **traversal order（中序）** 來思考；這一題**不做平衡**。
+> **Why this comes up in practice:** `std::map`, a database's B+Tree, and the OS's VMA tree all rest on the same idea: the in-order traversal of the nodes defines the order, which turns changing the set into local pointer operations. This exercise drills these fundamentals until you no longer have to think about them.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — 導航（O(h)）
+This exercise is the common foundation for the AVL tree, Set, and Sequence exercises that follow. Implement an owning `BinaryTree<T>` (each node has `parent`, `left`, and `right`), and think about every operation in terms of **traversal order (in-order)**; this exercise does **no balancing**.
 
-都是 static 函式，對任何節點都能呼叫：
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `subtree_first(n)` / `subtree_last(n)`：`n` 子樹在 traversal order 中第一個／最後一個節點。`n` 為 `nullptr` 時回傳 `nullptr`。
-- `successor(n)` / `predecessor(n)`：整棵樹的下一個／上一個節點，沒有時回傳 `nullptr`。
+Read one stage at a time.
 
-## Stage 2 — 插入與走訪
+## Stage 1 — Navigation (O(h))
 
-| 操作 | 行為 |
+```cpp
+template <typename T>
+class BinaryTree {
+public:
+    struct Node {
+        explicit Node(T value) : item(std::move(value)) {}
+        T item;
+        Node* parent = nullptr;
+        Node* left = nullptr;
+        Node* right = nullptr;
+    };
+
+    static Node* subtree_first(Node* node);
+    static Node* subtree_last(Node* node);
+    static Node* successor(Node* node);
+    static Node* predecessor(Node* node);
+};
+```
+
+These are all static functions, and they can be called on any node:
+
+- `subtree_first(n)` / `subtree_last(n)`: the first/last node of `n`'s subtree in traversal order. If `n` is `nullptr`, return `nullptr`.
+- `successor(n)` / `predecessor(n)`: the next/previous node in the whole tree, or `nullptr` if there is none.
+
+## Stage 2 — Insertion and traversal
+
+```cpp
+// in class BinaryTree<T>
+class iterator {
+public:
+    using iterator_concept = std::forward_iterator_tag;
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = T;
+    using difference_type = std::ptrdiff_t;
+    using pointer = T*;
+    using reference = T&;
+
+    iterator() = default;
+    reference operator*() const;
+    pointer operator->() const;
+    iterator& operator++();
+    iterator operator++(int);
+    friend bool operator==(const iterator&, const iterator&);
+};
+
+BinaryTree() = default;
+~BinaryTree();  // release every node without recursion
+
+BinaryTree(const BinaryTree&) = delete;
+BinaryTree& operator=(const BinaryTree&) = delete;
+
+Node* root() const;
+std::size_t size() const;
+bool empty() const;
+Node* insert_before(Node* anchor, T value);
+Node* insert_after(Node* anchor, T value);
+iterator begin() const;
+iterator end() const;
+```
+
+| Operation | Behavior |
 | --- | --- |
-| `insert_before(a, v)` | `a` 沒有左子節點時，新節點成為 `a` 的左子節點；否則成為 `a` 左子樹最後一個節點的右子節點 |
-| `insert_after(a, v)` | 左右對稱 |
-| `insert_before(nullptr, v)` / `insert_after(nullptr, v)` | 分別表示接到整棵樹的尾端／開頭 |
+| `insert_before(a, v)` | If `a` has no left child, the new node becomes `a`'s left child; otherwise it becomes the right child of the last node in `a`'s left subtree |
+| `insert_after(a, v)` | The mirror image |
+| `insert_before(nullptr, v)` / `insert_after(nullptr, v)` | Attach at the end / at the start of the whole tree, respectively |
 | `root()` / `size()` / `empty()` | |
-| `begin()` / `end()` | forward iterator，走完整棵樹 O(n)（`std::forward_iterator` 會被檢查） |
+| `begin()` / `end()` | Forward iterators; walking the whole tree is O(n) (`std::forward_iterator` is checked) |
 
-節點 `new` 出來後歸樹所有。解構子要釋放全部節點，且**不可以遞迴**：一條退化成 linked list 的樹，遞迴解構會把 stack 撐爆。
+Nodes are created with `new` and then owned by the tree. The destructor must free every node and **must not recurse**: on a tree that has degenerated into a linked list, recursive destruction overflows the stack.
 
-## Stage 3 — 刪除
+## Stage 3 — Deletion
 
-`erase(node)`：把 `node` 從樹中移除，回傳它的值，並維持其餘節點的 traversal order。O(h)。
+```cpp
+// in class BinaryTree<T>
+T erase(Node* node);
+```
 
-**只有被刪除的 `node` 失效，其他所有 `Node*` 必須仍然指向同一個 item。** 所以不能像 lecture 的 Python 版本那樣把 item 跟 successor 交換；要用指標把節點搬到正確位置（`successor` 是你手上剛好有的節點，比搬 item 乾淨）。
+`erase(node)`: remove `node` from the tree, return its value, and preserve the traversal order of the remaining nodes. O(h).
 
-邊界：葉節點、只有一個子節點、有兩個子節點、刪根、`successor` 正好是右子節點。
+**Only the erased `node` is invalidated; every other `Node*` must still point to the same item.** So you can't swap the item with the successor's the way the lecture's Python version does; relink pointers to move nodes into the right place instead (the `successor` is a node you already have in hand, which is cleaner than moving items).
 
-## Stage 4 — O(n) 建樹
+Edge cases: a leaf, a node with one child, a node with two children, erasing the root, and a `successor` that is exactly the right child.
 
-- `static BinaryTree build(std::vector<T> items)`：建出 traversal order 等於 `items` 的樹，O(n)，高度為 `⌊lg n⌋`（空樹除外），用 move 把 item 搬進節點。
-- move constructor / move assignment：被移走的樹變空，要 `noexcept`。
+## Stage 4 — Building in O(n)
 
-## Stage 5 — Set 介面：Binary Search Tree
+```cpp
+// in class BinaryTree<T>
+BinaryTree(BinaryTree&& other);             // should be noexcept once implemented
+BinaryTree& operator=(BinaryTree&& other);  // should be noexcept once implemented
 
-用 `BinaryTree<K>` 實作 `BstSet<K, Compare>`：traversal order 就是排序好的 key 順序。每個操作 O(h)：
+static BinaryTree build(std::vector<T> items);
+```
 
-- `insert(k)`（新 key 回傳 `true`）、`contains(k)`、`erase(k)`（有刪到回傳 `true`）、`size()`、`empty()`。
-- `find_min()` / `find_max()`：回傳 `std::optional<K>`。
-- `find_next(k)`：最小的 `> k` 的 key；`find_prev(k)`：最大的 `< k` 的 key。`k` 本身不必存在。
-- `to_vector()`：排序好的所有 key。`height()`：空樹 `-1`，否則是根到最深葉節點的邊數（可以 O(n)）。
+- `static BinaryTree build(std::vector<T> items)`: build a tree whose traversal order equals `items`, in O(n) and with height `⌊lg n⌋` (except for the empty tree), moving the items into the nodes.
+- Move constructor / move assignment: the moved-from tree becomes empty, and both must be `noexcept`. A self-move-assignment (`t = std::move(t)`) must leave the tree unchanged; the tests check it.
 
-記住這棵樹會退化：依序插入遞增的 key 時，高度是 `n - 1`。下一題解決這件事。
+## Stage 5 — Set interface: Binary Search Tree
 
-## 面試追問
+```cpp
+template <typename K, typename Compare = std::less<K>>
+class BstSet {
+public:
+    explicit BstSet(Compare compare = Compare{});
 
-1. 為什麼 `successor` 的最壞情況是 O(h)，而走訪整棵樹卻只要 O(n)？
-2. Lecture 的 delete 用 swap item 寫起來簡單，C++ 上換成 pointer relink 的代價和好處是什麼？
-3. `std::set` 的 iterator 在 `erase` 後還能用嗎？你的設計能不能達到一樣的保證？
+    bool insert(K key);
+    bool contains(const K& key) const;
+    bool erase(const K& key);
+    std::size_t size() const;
+    bool empty() const;
+    std::optional<K> find_min() const;
+    std::optional<K> find_max() const;
+    std::optional<K> find_next(const K& key) const;
+    std::optional<K> find_prev(const K& key) const;
+    std::vector<K> to_vector() const;
+    int height() const;
+};
+```
+
+Use `BinaryTree<K>` to implement `BstSet<K, Compare>`: the traversal order is the sorted order of the keys. Every operation is O(h):
+
+- `insert(k)` (returns `true` for a new key), `contains(k)`, `erase(k)` (returns `true` if it removed a key), `size()`, and `empty()`.
+- `find_min()` / `find_max()`: return the first/last key in `Compare` order as a `std::optional<K>` (`std::nullopt` when the set is empty).
+- `find_next(k)`: the smallest key `> k`; `find_prev(k)`: the largest key `< k`. `k` itself need not be present.
+- `to_vector()`: all the keys, sorted. `height()`: `-1` for an empty tree, otherwise the number of edges from the root to the deepest leaf (O(n) is fine).
+
+Remember that this tree degenerates: if you insert keys in increasing order, its height is `n - 1`. The next exercise fixes that.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is `successor` O(h) in the worst case, while walking the whole tree takes only O(n)?
+2. The lecture's delete is simple to write because it swaps items. In C++, what does relinking pointers instead cost you, and what does it buy you?
+3. Can a `std::set` iterator still be used after an `erase`? Can your design offer the same guarantee?

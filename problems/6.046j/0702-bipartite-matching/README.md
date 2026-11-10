@@ -1,6 +1,6 @@
 ---
-title: Bipartite Matching（König 定理與 Hall 憑證）
-unit: 07 · Network Flow（PS7）
+title: Bipartite Matching (König's theorem and Hall certificates)
+unit: 07 · Network Flow (PS7)
 source: 6.046J Lecture 14, Recitation 7
 pdf: materials/6.046j/lectures/lec14a.pdf
 read: materials/6.046j/lectures/lec14a.pdf, materials/6.046j/recitations/rec07.pdf
@@ -10,41 +10,71 @@ minutes: 110
 
 # 0702 · Bipartite Matching
 
-> **實務上為什麼會遇到**：工作分派給機器、廣告版位配對、Pod 排到節點。當排不滿的時候，真實系統要回答「為什麼排不滿」，這就是 Hall 違反集合的用途。
+**Based on:** [Incremental Improvement: Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bdafe05f4f3c20cabfd08d2fbd099f63_MIT6_046JS15_lec14A.pdf) · **Read first:** [Incremental Improvement: Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bdafe05f4f3c20cabfd08d2fbd099f63_MIT6_046JS15_lec14A.pdf), [Incremental Improvement: Applications of Network Flow & Matching](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ba74f89434fc261d9366ebf136c04b52_MIT6_046JS15_Recitation7.pdf)
 
-左側頂點 `0..left-1`，右側 `0..right-1`，邊 `{l, r}`。`std::span<const std::pair<int,int>>` 輸入，可能有重複邊。
+> **Why this comes up in practice:** assigning jobs to machines, matching ads to ad slots, and scheduling Pods onto nodes. When not everything can be placed, a real system has to answer "why not?", and that is what a set violating Hall's condition is for.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — 最大配對
+Left vertices are `0..left-1`, right vertices are `0..right-1`, and edges are `{l, r}`. The input is a `std::span<const std::pair<int,int>>` and may contain duplicate edges.
+
+You compute maximum matchings two ways (any augmenting-path method, then Hopcroft-Karp) and produce the two certificates from Lecture 14 and Recitation 7: a minimum vertex cover (König) and a left-side set that violates Hall's condition.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Maximum matching
 
 ```cpp
 struct Matching {
     int size = 0;
-    std::vector<int> match_left;   // match_left[l]  = 配到的右側頂點，或 -1
-    std::vector<int> match_right;  // match_right[r] = 配到的左側頂點，或 -1
+    std::vector<int> match_left;   // match_left[l]  = the matched right vertex, or -1
+    std::vector<int> match_right;  // match_right[r] = the matched left vertex, or -1
 };
 Matching max_matching(int left, int right, std::span<const std::pair<int,int>> edges);
 ```
 
-O(VE) 即可（augmenting path 或 flow 都行）。
+O(VE) is enough (augmenting paths or flow both work).
 
-## Stage 2 — König：最小點覆蓋
+## Stage 2 — König: minimum vertex cover
 
-Recitation 7 把二分圖點覆蓋化成 min cut。實作 `VertexCover min_vertex_cover(int left, int right, edges)`，回傳 `VertexCover{left, right}`：左右被選到的頂點（升冪），覆蓋每條邊，總大小最小。
+```cpp
+struct VertexCover {
+    std::vector<int> left;
+    std::vector<int> right;
+};
+VertexCover min_vertex_cover(int left, int right,
+                             std::span<const std::pair<int, int>> edges);
+```
 
-König 定理保證大小等於最大配對。
+Recitation 7 reduces bipartite vertex cover to min cut. Implement `VertexCover min_vertex_cover(int left, int right, edges)`, which returns `VertexCover{left, right}`: the chosen left and right vertices (in increasing order), which cover every edge and have the smallest possible total size.
+
+König's theorem guarantees that this size equals the size of a maximum matching.
 
 ## Stage 3 — Hopcroft-Karp
 
-`Matching hopcroft_karp(int left, int right, edges)`：O(E√V)。每個 phase 先 BFS 分層，再用 DFS 沿分層找一組極大 vertex-disjoint augmenting paths。
+```cpp
+Matching hopcroft_karp(int left, int right, std::span<const std::pair<int, int>> edges);
+```
 
-## Stage 4 — 實務延伸：Hall 違反集合
+`Matching hopcroft_karp(int left, int right, edges)`: O(E√V). Each phase first builds layers with BFS, then uses DFS along the layers to find a maximal set of vertex-disjoint augmenting paths.
 
-`std::vector<int> hall_violator(int left, int right, edges)`：若存在讓所有左側頂點都配對的 matching，回傳空 vector；否則回傳一個左側子集 `S`（非空、升冪），滿足 `|N(S)| < |S|`（鄰居數少於自身數）。
+## Stage 4 — Real-world extension: Hall violators
 
-## 面試追問
+```cpp
+std::vector<int> hall_violator(int left, int right,
+                               std::span<const std::pair<int, int>> edges);
+```
 
-1. 從 flow network 的 min cut 怎麼讀出 König 的 vertex cover？（`S ∩ R` 和 `T ∩ L` 為什麼對？）
-2. Hopcroft-Karp 為什麼只要 O(√V) 個 phase？
-3. 如果要的是「權重最大」的 matching，這些方法哪些還能用？（Hungarian / min-cost flow）
+`std::vector<int> hall_violator(int left, int right, edges)`: if some matching covers every left vertex, return an empty vector. Otherwise return a subset `S` of the left side (nonempty, in increasing order) with `|N(S)| < |S|` (fewer neighbors than members).
+
+The tests pin down which subset: take a maximum matching and return exactly the left vertices that can be reached from an unmatched left vertex along an alternating path (for edges `{0,0}`, `{1,0}`, `{2,1}` that is `{0, 1}`, not `{0, 1, 2}`).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. How do you read König's vertex cover off a min cut of the flow network? (Why are `S ∩ R` and `T ∩ L` the right sets?)
+2. Why does Hopcroft-Karp need only O(√V) phases?
+3. If you wanted a maximum-weight matching instead, which of these methods would still work? (Hungarian / min-cost flow)

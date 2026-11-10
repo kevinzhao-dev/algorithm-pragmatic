@@ -1,6 +1,6 @@
 ---
-title: Heap Practice（分類與 swap trace）
-unit: 04 · Trees & Heaps（PS4）
+title: Heap Practice (classification and swap traces)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 PS4 Problem 4-2
 pdf: materials/6.006/psets/ps4/questions.pdf
 answer: materials/6.006/psets/ps4/solutions.pdf
@@ -11,33 +11,76 @@ minutes: 30
 
 # 0412 · Heap Practice
 
-> **實務上為什麼會遇到**：heap 相關的 bug 通常不是 crash，而是順序悄悄錯掉。這題練的是把「一個陣列是不是 heap」變成機械化的檢查，也順便練習建立 heap 的每一步。
+**Original problem:** [Problem Set 4 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/bff0aaeeb571a77083f10fd8e31f71d4_MIT6_006S20_ps4-questions.pdf) · **Read first:** [Lecture 8: Binary Heaps notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/40d4851e550507ca14dc778b9b2266cc_MIT6_006S20_lec8.pdf), [Recitation 8 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/701c2f339890cbf9c0c2a3495d007f26_MIT6_006S20_r08.pdf)
 
-把陣列視為完全二元樹（`left(i) = 2i+1`、`right(i) = 2i+2`）。做完後可以把 PDF 上那幾組陣列拿來驗算。
+> **Why this comes up in practice:** heap bugs usually aren't crashes; the order just quietly goes wrong. This exercise practices turning "is this array a heap?" into a mechanical check, and along the way practices every step of building a heap.
 
-## Stage 1 — 分類
+## Original problem
 
-`classify_heap(values)`：回傳 `HeapKind::Max`、`Min`、`Both`（空陣列、單一元素、或全部相同）或 `Neither`。允許相等，例如 `[5, 5, 3]` 是 max-heap。
+6.006 PS4 Problem 4-2 gives four arrays to read as complete binary trees. A binary tree is complete when every depth i except possibly the deepest holds exactly 2^i nodes, and the nodes at the deepest level are packed as far left as possible.
 
-## Stage 2 — 建 min-heap 並記錄 swap
+- (a) [4, 12, 8, 21, 14, 9, 17]
+- (b) [701, 253, 24, 229, 17, 22]
+- (c) [2, 9, 13, 8, 0, 2]
+- (d) [1, 3, 6, 5, 4, 9, 7]
 
-`min_heapify_trace(values)`：**在原地**把 `values` 轉成 min-heap，回傳每一次交換的索引對 `(i, j)`。
+For each array, draw the tree and say whether it is a max-heap, a min-heap, or neither. If it is neither, convert it into a min-heap purely by exchanging parent-child pairs, and record the exchanges as a series of drawings, each highlighting the two items just swapped.
 
-- 每次交換的兩個位置必須在樹上相鄰（一個是另一個的父節點），且是對當下陣列的實際交換，也就是**只**靠這些 swap 就能從原陣列得到結果。
-- 已經是 min-heap 就回傳空列表。
-- 交換次數不能超過 `n`（`n = values.size()`）。
+## Your task
 
-測試會把你的 trace 重放在原陣列上驗證。
+Treat an array as a complete binary tree (`left(i) = 2i+1`, `right(i) = 2i+2`). Once you're done, you can check your work on the arrays from the Original problem section. Stage 1 classifies an array, Stage 2 records the swaps that turn it into a min-heap, and Stage 3 goes beyond the original with two more questions about max-heaps.
 
-## Stage 3 — 最小值與轉換
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `min_of_max_heap(heap)`：`heap` 是 max-heap，回傳其中一個最小元素的參考（空的時候丟 `std::invalid_argument`）。比較次數不能超過 `⌈n/2⌉`。想一下最小值只能在哪些位置。
-- `max_heap_to_min_heap(heap)`：把 max-heap 改造成 min-heap，比較次數 O(n)。（max-heap 這個前提有沒有幫到你？）
+## Stage 1 — Classification
 
-模板參數 `T` 只需要支援 `<`。
+```cpp
+enum class HeapKind { Max, Min, Both, Neither };
 
-## 面試追問
+inline HeapKind classify_heap(std::span<const int> values);
+```
 
-1. Stage 2 用「由下往上 sift-down」跟「依序 sift-up」的 swap 次數差多少？
-2. `min_of_max_heap` 為什麼不能少於約 `n/2` 次比較？
-3. 把 max-heap 轉成 min-heap，為什麼已知的 max-heap 結構完全幫不上忙？
+`classify_heap(values)`: return `HeapKind::Max`, `Min`, `Both` (an empty array, a single element, or all elements equal), or `Neither`. Equal values are allowed; for example, `[5, 5, 3]` is a max-heap.
+
+## Stage 2 — Build a min-heap and record the swaps
+
+```cpp
+using SwapStep = std::pair<std::size_t, std::size_t>;
+
+inline std::vector<SwapStep> min_heapify_trace(std::span<int> values);
+```
+
+`min_heapify_trace(values)`: turn `values` into a min-heap **in place**, and return the index pair `(i, j)` of every swap.
+
+- The two positions in each swap must be adjacent in the tree (one is the parent of the other), and each swap must be an actual swap on the array as it stands at that moment. In other words, applying **only** these swaps to the original array produces the result.
+- If the array is already a min-heap, return an empty list.
+- The number of swaps must not exceed `n` (`n = values.size()`).
+
+The tests replay your trace on the original array to verify it.
+
+## Stage 3 — The minimum, and conversion
+
+```cpp
+template <typename T>
+const T& min_of_max_heap(std::span<const T> heap);
+
+template <typename T>
+void max_heap_to_min_heap(std::span<T> heap);
+```
+
+- `min_of_max_heap(heap)`: `heap` is a max-heap; return a reference to one of its smallest elements (throw `std::invalid_argument` if it is empty). Make no more than `⌈n/2⌉` comparisons. Think about which positions the minimum can be in.
+- `max_heap_to_min_heap(heap)`: turn a max-heap into a min-heap with O(n) comparisons (at most `3n`). (Does knowing that it's a max-heap help you?)
+
+The template parameter `T` only needs to support `<`.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. In Stage 2, how much do the swap counts differ between bottom-up sift-down and sifting up one element at a time?
+2. Why can't `min_of_max_heap` get by with fewer than about `n/2` comparisons?
+3. When you convert a max-heap into a min-heap, why doesn't the known max-heap structure help at all?
+
+---
+
+**Official solution:** [Problem Set 4 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0462839ce975fea99f6a7b8adc8e1477_MIT6_006S20_ps4-solutions.pdf). Read it after you finish.

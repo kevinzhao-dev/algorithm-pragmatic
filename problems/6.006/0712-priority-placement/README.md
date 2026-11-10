@@ -1,6 +1,6 @@
 ---
-title: 依優先序把工作放到機器上（序列對齊 DP）
-unit: 07 · Dynamic Programming I（PS7）
+title: Placing Tasks on Servers by Priority (sequence-alignment DP)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 PS7 Problem 7-2
 pdf: materials/6.006/psets/ps7/questions.pdf
 answer: materials/6.006/psets/ps7/solutions.pdf
@@ -9,39 +9,68 @@ kind: code
 minutes: 70
 ---
 
-# 0712 · 依優先序把工作放到機器上
+# 0712 · Placing Tasks on Servers by Priority
 
-> **實務上為什麼會遇到**：叢集排程常要求「比較重要的工作一定要放到比較近、比較快的機器」，同時又要盡量少超賣資源。高優先序配低延遲這條規則把問題壓成一維順序，於是不用解通用的 assignment problem，一張 LCS 形狀的表就夠了。
+**Original problem:** [Problem Set 7 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/3dff7a1ecbc241e9b91b48e69a1588d4_MIT6_006S20_ps7_questions.pdf) · **Read first:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf)
 
-有 `n` 個工作和 `m` 台機器（`m ≥ n`，可能遠大於 `n`）。每個工作恰好放一台機器，每台機器最多放一個工作。
+> **Why this comes up in practice:** cluster schedulers often require that "more important tasks must go on closer, faster servers", while overcommitting resources as little as possible. The rule that pairs high priority with low latency squeezes the problem into a one-dimensional order, so instead of solving a general assignment problem, an LCS-shaped table is enough.
+
+## Original problem
+
+6.006 PS7 Problem 7-2 is about a pet owner with n tigers and n² cages.
+
+- Tiger i has a positive integer age a_i and a positive integer size s_i. All ages are distinct, and so are all sizes.
+- Cage j has a positive integer capacity c_j and a distance d_j from the owner's bedroom. All capacities are distinct, and so are all distances.
+
+Each tiger needs a cage to itself. Older tigers get the closer cages: for any tigers x and y with a_x < a_y, their cages X and Y must satisfy d_Y < d_X. A tiger i housed in cage j has discomfort s_i − c_j if s_i > c_j, and no discomfort if s_i ≤ c_j. The problem asks for an O(n³)-time algorithm that finds an assignment obeying the age rule with the least total discomfort. As with every PS7 problem, the solution must be a dynamic program presented through the SRT BOT steps.
+
+## Your task
+
+There are `n` tasks and `m` servers (usually `m ≥ n`, and `m` may be far larger than `n`; each stage says what to do when `n > m`). Each task goes on exactly one server, and each server hosts at most one task.
 
 ```cpp
 struct Task { int priority; int demand; };      // all priorities distinct; larger = more important
 struct Server { int latency; int capacity; };   // all latencies distinct
 ```
 
-- **順序規則**：若工作 `a` 的 `priority` 大於工作 `b`，那 `a` 所在機器的 `latency` 必須**嚴格小於** `b` 的。
-- **超賣成本**：工作放到容量 `c` 的機器上，成本是 `max(0, demand − c)`。
+- **Order rule:** if task `a` has a larger `priority` than task `b`, the server hosting `a` must have a **strictly smaller** `latency` than the one hosting `b`.
+- **Overload cost:** placing a task on a server with capacity `c` costs `max(0, demand − c)`.
 
-目標是在遵守順序規則下，總成本最小。一次只看一關，做完再往下讀。
+The goal is the smallest total cost that obeys the order rule.
 
-## Stage 1 — 最小成本
+This is the original problem with tasks in place of tigers (`priority` for age, `demand` for size) and servers in place of cages (`latency` for distance); with m = n² servers, O(n·m) is the original O(n³) bound. Beyond the minimum cost, you also return the assignment, cut the memory, and allow tasks to be dropped.
 
-`std::optional<std::int64_t> min_overload(std::span<const Task> tasks, std::span<const Server> servers)`：O(n·m) 時間（排序除外）。`n > m` 時回傳 `std::nullopt`；沒有工作時回傳 0。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-先想清楚：排好序之後，答案長得像「在一個序列裡挑出子序列去對齊另一個序列」。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 實際配置
+## Stage 1 — Minimum cost
 
-`std::optional<std::vector<std::size_t>> assign_servers(tasks, servers)`：回傳的 vector 中第 `i` 個值是 `tasks[i]` 配到的機器索引（依輸入順序，不是排序後的順序）。總成本要是最小值，同分時任一種都可以。
+```cpp
+std::optional<std::int64_t> min_overload(std::span<const Task> tasks,
+                                         std::span<const Server> servers);
+```
 
-## Stage 3 — `min_overload` 降到 O(m) 記憶體
+`std::optional<std::int64_t> min_overload(std::span<const Task> tasks, std::span<const Server> servers)`: O(n·m) time (not counting sorting). Return `std::nullopt` when `n > m`, and 0 when there are no tasks.
 
-Relation 只看下一列，所以記憶體不該隨 `n` 成長。Heap 高水位要在 O(m) 以內。
+Think it through first: once both sides are sorted, the answer looks like picking a subsequence of one sequence and aligning it with the other sequence.
 
-## Stage 4 — 實務延伸：允許丟棄工作
+## Stage 2 — The actual assignment
 
-機器不夠或成本太高時，排程器會直接拒絕工作：
+```cpp
+std::optional<std::vector<std::size_t>> assign_servers(std::span<const Task> tasks,
+                                                       std::span<const Server> servers);
+```
+
+`std::optional<std::vector<std::size_t>> assign_servers(tasks, servers)`: the `i`-th value in the returned vector is the index of the server that `tasks[i]` is placed on (in input order, not in sorted order). The total cost must be the minimum; when several assignments tie, any of them is fine. Return `std::nullopt` when `n > m`.
+
+## Stage 3 — Cut `min_overload` to O(m) memory
+
+The relation looks only at the next row, so the memory shouldn't grow with `n`. The heap high-water mark must stay within O(m) (the tests allow at most 96 bytes per server).
+
+## Stage 4 — Real-world extension: allowing tasks to be dropped
+
+When there aren't enough servers or the cost is too high, a scheduler simply rejects tasks:
 
 ```cpp
 struct DropPlan { std::int64_t cost; std::vector<std::optional<std::size_t>> assignment; };
@@ -49,10 +78,16 @@ DropPlan plan_with_drops(std::span<const Task> tasks, std::span<const Server> se
                          std::span<const std::int64_t> drop_penalty);
 ```
 
-`drop_penalty[i] ≥ 0` 是丟棄 `tasks[i]` 的代價，`assignment[i]` 是配到的機器或 `std::nullopt`。**已配置的工作之間**仍要遵守順序規則。回傳總代價最小的方案，`n > m` 也要能處理。O(n·m) 時間。
+`drop_penalty[i] ≥ 0` is the cost of dropping `tasks[i]`, and `assignment[i]` is the server it is placed on, or `std::nullopt`. The order rule must still hold **among the tasks that are placed**. Return the plan with the lowest total cost; it must also handle `n > m`. O(n·m) time.
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼順序規則能讓問題從通用的 assignment（Hungarian，O(n³) 以上）簡化成 O(n·m)？去掉規則後這個 DP 還成立嗎？
-2. Stage 2 要還原解，但表太大時，你會怎麼縮小 parent 的儲存（一個 cell 需要幾個 bit）？
-3. `m` 是輸入大小的一部分，這個演算法是 polynomial 還是 pseudopolynomial？
+Once you're done, answer without looking at your code:
+
+1. Why does the order rule reduce the problem from general assignment (Hungarian, O(n³) or more) to O(n·m)? Does this DP still work once the rule is removed?
+2. Stage 2 has to recover the solution. When the table is too big, how would you shrink the storage for the parents (how many bits does one cell need)?
+3. Given that `m` is part of the input size, is this algorithm polynomial or pseudopolynomial?
+
+---
+
+**Official solution:** [Problem Set 7 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ed996e1569867432dc1fbdeae53e309f_MIT6_006S20_ps7_solutions.pdf). Read it after you finish.

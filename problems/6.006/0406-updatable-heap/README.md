@@ -1,6 +1,6 @@
 ---
-title: 可更新優先權的 Heap（handle）
-unit: 04 · Trees & Heaps（PS4）
+title: Heap with Updatable Priorities (handles)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 Lecture 8, Recitation 8
 pdf: materials/6.006/recitations/rec08.pdf
 read: materials/6.006/lectures/lec08.pdf
@@ -8,49 +8,103 @@ kind: code
 minutes: 75
 ---
 
-# 0406 · 可更新優先權的 Heap
+# 0406 · Heap with Updatable Priorities
 
-> **實務上為什麼會遇到**：Dijkstra 的 decrease-key、作業系統排程器調整優先權、限流器重新計算下一次放行時間：這些場景都需要「手上握著 handle，O(log n) 改掉某個元素的優先權」。`std::priority_queue` 做不到，它不知道元素在陣列裡的位置。
+**Based on:** [Recitation 8 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/701c2f339890cbf9c0c2a3495d007f26_MIT6_006S20_r08.pdf) · **Read first:** [Lecture 8: Binary Heaps notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/40d4851e550507ca14dc778b9b2266cc_MIT6_006S20_lec8.pdf)
 
-`UpdatableHeap<T, Compare>` 是最大堆（依 `Compare`）。跟 0405 不同的是：`push` 回傳一個穩定的 `Handle`，之後可以隨時用它查詢或修改該元素，而元素在陣列中的位置會一直變。
+> **Why this comes up in practice:** Dijkstra's decrease-key, an OS scheduler adjusting priorities, a rate limiter recomputing when it will next let a request through: all of these need to change an element's priority in O(log n) through a handle you already hold. `std::priority_queue` can't do that, because it doesn't know where an element sits in its array.
 
-核心做法：**heap 陣列和 handle 表要互相同步**。handle 記著自己對應到 slot，slot 記著它在 heap 陣列裡的位置；每次 swap 都要同時更新這兩邊。
+## Your task
 
-`Handle` 是可比較、可預設建構的值型別，內容由你設計。
+`UpdatableHeap<T, Compare>` is a max-heap (with respect to `Compare`). Unlike 0405, `push` returns a stable `Handle` that you can later use at any time to look up or modify that element, even though the element's position in the array keeps changing.
 
-## Stage 1 — push / pop 與 handle
+The core approach: **keep the heap array and the handle table in sync with each other**. A handle records which slot it maps to, and the slot records its position in the heap array; every swap must update both sides.
 
-- `push(v)`：回傳 handle，O(log n)。
-- `top()` / `top_handle()`：O(1)；空堆時丟 `std::out_of_range`。
-- `pop()`：移除並回傳堆頂（空堆丟 `std::out_of_range`）。
-- `contains(h)`：這個 handle 目前是否有效。**預設建構的 handle 永遠無效。**
-- `get(h)`：取值；無效的 handle 丟 `std::invalid_argument`。
-- `size()` / `empty()`。
+`Handle` is a comparable, default-constructible value type, and you design its contents.
 
-## Stage 2 — 改優先權
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`update(h, v)`：把 `h` 的值改成 `v`，O(log n)，可能往上也可能往下；`h` 無效時丟 `std::invalid_argument`。
+## Stage 1 — push / pop and handles
 
-## Stage 3 — 任意刪除與失效偵測
+```cpp
+template <typename T, typename Compare = std::less<T>>
+class UpdatableHeap {
+public:
+    class Handle {
+    public:
+        Handle() = default;
+        friend bool operator==(const Handle&, const Handle&);
+    };
 
-- `erase(h)`：刪除並回傳該元素，O(log n)，`h` 無效時丟 `std::invalid_argument`。
-- `pop` 或 `erase` 之後，舊的 handle 必須永遠保持無效，**即使內部的 slot 被新元素重用**（想一下 generation counter）。
-- `build(items)`：丟掉現有內容，用 `items` 重建，O(n)（比較次數不超過 `3n`），回傳每個 item 的 handle（順序與 `items` 相同）。
+    explicit UpdatableHeap(Compare compare = Compare{});
 
-## Stage 4 — 實務延伸：截止時間排程器
+    Handle push(T value);
+    const T& top() const;
+    Handle top_handle() const;
+    T pop();
+    std::size_t size() const;
+    bool empty() const;
+    bool contains(Handle handle) const;
+    const T& get(Handle handle) const;
+};
+```
 
-`DeadlineScheduler` 管理有名稱的工作，任務名稱唯一：
+- `push(v)`: return a handle, in O(log n).
+- `top()` / `top_handle()`: O(1); throw `std::out_of_range` on an empty heap.
+- `pop()`: remove and return the top (throw `std::out_of_range` on an empty heap).
+- `contains(h)`: whether this handle is currently valid. **A default-constructed handle is never valid.**
+- `get(h)`: get the value; throw `std::invalid_argument` for an invalid handle.
+- `size()` / `empty()`.
 
-- `submit(name, deadline)`：新工作回傳 `true`；名稱已存在則回傳 `false`、不做事。
-- `reschedule(name, deadline)`：改截止時間（保留原本的提交順序），找不到回傳 `false`。
-- `cancel(name)`：移除工作，找不到回傳 `false`。
-- `next()`：取出最早該執行的工作名稱；沒有工作時 `std::nullopt`。同截止時間時，**先 submit 的先做**。
-- `peek()`：查看但不取出。`size()`。
+## Stage 2 — Changing priorities
 
-每個操作 O(log n)（期望，因為要用 hash map 從名稱找 handle）。
+```cpp
+// in class UpdatableHeap<T, Compare>
+void update(Handle handle, T value);
+```
 
-## 面試追問
+`update(h, v)`: change the value of `h` to `v` in O(log n) (at most `3⌈lg n⌉ + 8` comparisons in the tests); the element may move up or down. Throw `std::invalid_argument` if `h` is invalid.
 
-1. Dijkstra 用 lazy deletion（重複 push，pop 時跳過過期項）和 decrease-key，各有什麼取捨？
-2. handle 為什麼不能直接存陣列索引？generation counter 能防止什麼 bug？
-3. 你的 slot 表會無限增長嗎？`erase` 之後的 slot 怎麼處理？
+## Stage 3 — Arbitrary deletion and stale-handle detection
+
+```cpp
+// in class UpdatableHeap<T, Compare>
+T erase(Handle handle);
+std::vector<Handle> build(std::vector<T> items);
+```
+
+- `erase(h)`: delete and return that element in O(log n); throw `std::invalid_argument` if `h` is invalid.
+- After a `pop` or `erase`, the old handle must stay invalid forever, **even if the internal slot is reused by a new element** (think about a generation counter).
+- `build(items)`: throw away the current contents and rebuild from `items` in O(n) (no more than `3n` comparisons), returning a handle for every item (in the same order as `items`).
+
+## Stage 4 — Real-world extension: deadline scheduler
+
+```cpp
+class DeadlineScheduler {
+public:
+    bool submit(const std::string& name, std::int64_t deadline);
+    bool reschedule(const std::string& name, std::int64_t deadline);
+    bool cancel(const std::string& name);
+    std::optional<std::string> next();
+    std::optional<std::string> peek() const;
+    std::size_t size() const;
+};
+```
+
+`DeadlineScheduler` manages named jobs, and job names are unique:
+
+- `submit(name, deadline)`: return `true` for a new job; if the name already exists, return `false` and do nothing.
+- `reschedule(name, deadline)`: change the deadline (keeping the original submission order); return `false` if the name isn't found.
+- `cancel(name)`: remove the job; return `false` if the name isn't found.
+- `next()`: take out the name of the job that should run first, or `std::nullopt` if there are no jobs. Among equal deadlines, **the job submitted first runs first**.
+- `peek()`: look at that name without taking it out. `size()`.
+
+Every operation is O(log n) (expected, because you need a hash map to find a handle from a name).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. For Dijkstra, what are the trade-offs between lazy deletion (pushing duplicates and skipping stale entries when popping) and decrease-key?
+2. Why can't a handle simply store an array index? What bugs does a generation counter prevent?
+3. Does your slot table grow without bound? What happens to a slot after `erase`?

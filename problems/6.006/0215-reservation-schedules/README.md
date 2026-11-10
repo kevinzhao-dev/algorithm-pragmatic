@@ -1,6 +1,6 @@
 ---
-title: 資源預約排程（Merge、分治、線上版本）
-unit: 02 · Sorting & Recurrences（PS2）
+title: Resource Reservation Schedules (merge, divide and conquer, and an online version)
+unit: 02 · Sorting & Recurrences (PS2)
 source: 6.006 PS2 Problem 2-5
 pdf: materials/6.006/psets/ps2/questions.pdf
 answer: materials/6.006/psets/ps2/solutions.pdf
@@ -9,36 +9,100 @@ kind: code
 minutes: 100
 ---
 
-# 0215 · 資源預約排程
+# 0215 · Resource Reservation Schedules
 
-> **實務上為什麼會遇到**：叢集排程要知道「這批 job 同時要幾台機器」，把一堆區間的需求合併成一條隨時間變化的階梯函數；這跟 merge sort 的合併是同一招。LSM tree 把寫入累積成一層一層再合併，第三關做的就是這件事。
+**Original problem:** [Problem Set 2 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/70d9c6b212c6dfce6723259ffb429521_MIT6_006S20_ps2-questions.pdf) · **Read first:** [Lecture 3: Sorting notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6d1ae5278d02bbecb5c4428928b24194_MIT6_006S20_lec3.pdf)
 
-一個 job 要在半開區間 `[start, end)` 占用一台機器（`start < end`）。**排程（schedule）** 是一串 `Reservation{machines, start, end}`，意思是在 `[start, end)` 要 `machines` 台（`machines > 0`）。合法的排程滿足：區間互不重疊、依時間遞增、相鄰且接觸的區間 `machines` 一定不同（相同就該合併成一段）。沒有 job 的時段就是沒有 reservation。一組 job 恰好對應一個合法排程。
+> **Why this comes up in practice:** a cluster scheduler needs to know "how many machines this batch of jobs needs at once," which means merging the demand of a pile of intervals into one step function over time; that is the same trick as merge sort's merge. An LSM tree accumulates writes into layer after layer and then merges them, and that is exactly what Stage 3 does.
 
-例如 jobs `[0,2) [1,3) [2,6)` 的排程是 `(1,[0,1)) (2,[1,3)) (1,[3,6))`。
+## Original problem
 
-## Stage 1 — 合併兩個排程
+6.006 PS2 Problem 2-5, "Beaver Bookings," has Tim the Beaver running Tim Talks, a lecture series in which anyone in the MIT community can book a time to speak. The problem defines:
 
-`merge_schedules(a, b)`：`a`、`b` 是兩個合法排程（兩組 job 各自的需求），回傳兩組 job 合起來的排程，**O(|a| + |b|)**。
+- A "talk request" (s, t) gives a talk's start time s and end time t, with s < t. Times are positive integers, counted in time units from a fixed starting point.
+- A "room booking" (k, s, t) reserves k > 0 rooms from time s to time t, where s < t.
+- Bookings (k1, s1, t1) and (k2, s2, t2) are "disjoint" when t1 ≤ s2 or t2 ≤ s1, and "adjacent" when t1 = s2 or t2 = s1.
+- A "booking schedule" is an ordered tuple of room bookings that are pairwise disjoint, listed by increasing start time, and in which any two adjacent bookings reserve different numbers of rooms.
 
-- 邊界：任一邊是空的、兩邊在同一時間點開始或結束、完全包含、一段 `a` 同時跨過好幾段 `b`、接觸但不重疊（要合併相同機器數的相鄰區間）。
-- 建議先想清楚什麼時候「目前時間 `t`」要往下一個事件推進。
+Every set R of talk requests has exactly one booking schedule B that "satisfies" it, meaning that B reserves exactly as many rooms as the talks need. For example, for R = {(2, 3), (4, 10), (2, 8), (6, 9), (0, 1), (1, 12), (13, 14)}, the satisfying schedule is B = ((1, 0, 2), (3, 2, 3), (2, 3, 4), (3, 4, 6), (4, 6, 8), (3, 8, 9), (2, 9, 10), (1, 10, 12), (1, 13, 14)); the original also draws this example on a timeline.
 
-## Stage 2 — 分治
+- (a) You are given the booking schedules B1 and B2 of two sets of talk requests R1 and R2, with n = |B1| + |B2|. Describe an O(n)-time algorithm that computes the booking schedule B for R = R1 ∪ R2.
+- (b) Given a set R of n talk requests, describe an O(n log n)-time algorithm that returns the booking schedule that satisfies R.
+- (c) Write `satisfying_booking(R)`, which takes a tuple of (s, t) talk requests and returns the satisfying booking schedule as a tuple of (k, s, t) triples, using your algorithm.
 
-`satisfying_schedule(jobs)`：`jobs` 是 `std::span<const JobRequest>`，回傳合法排程，**O(n log n)**，要用 merge sort 的結構（Stage 1 的 merge 當合併步驟）。空的 `jobs` 回傳空排程；`start ≥ end` 的 job 丟 `std::invalid_argument`。
+Implement part (c) in the Python template, which comes with a few test cases.
 
-## Stage 3 — 實務延伸：線上累積（LSM 手法）
+## Your task
 
-`IncrementalPlanner`：job 一個一個進來，隨時可能要看目前的排程。
+A job occupies one machine over the half-open interval `[start, end)` (`start < end`). A **schedule** is a sequence of `Reservation{machines, start, end}` values, each meaning that `machines` machines are needed over `[start, end)` (`machines > 0`). A valid schedule satisfies three conditions: the intervals don't overlap, they are in increasing time order, and intervals that are adjacent and touch always have different `machines` (if they were equal, they should be merged into one piece). A period with no jobs simply has no reservation. Each set of jobs corresponds to exactly one valid schedule.
 
-- `add(job)`：攤提 **O(log n)**。不可每次都重算（有 `PERF` 檢查）：維持數個依大小呈倍數成長的小排程（像二進位計數器一樣合併，這正是 LSM tree 的手法）。
-- `schedule()`：回傳目前所有 job 的排程，O(n)。
-- `peak()`：目前最多同時需要幾台機器，O(n) 即可。
-- `size()`：已加入的 job 數。
+For example, the schedule for the jobs `[0,2) [1,3) [2,6)` is `(1,[0,1)) (2,[1,3)) (1,[3,6))`.
 
-## 面試追問
+This is the original problem with jobs and machines in place of talks and rooms; Stage 3 adds an online version, which the original problem doesn't have.
 
-1. 為什麼這個問題要用分治而不是把每個端點排序後掃一遍？掃描線法（sort + sweep）的複雜度和常數如何比較？
-2. `merge_schedules` 的正確性不變量是什麼？一步驟裡 `t` 可能跳過哪些事件？
-3. 把 Stage 3 換成真的 LSM tree：什麼時候觸發 compaction？讀放大和寫放大各是什麼？
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Merging two schedules
+
+```cpp
+struct Reservation {
+    std::int64_t machines;
+    std::int64_t start;
+    std::int64_t end;
+    friend bool operator==(const Reservation&, const Reservation&) = default;
+    friend std::ostream& operator<<(std::ostream& os, const Reservation& r);  // provided
+};
+
+using Schedule = std::vector<Reservation>;
+
+Schedule merge_schedules(const Schedule& a, const Schedule& b);
+```
+
+`merge_schedules(a, b)`: `a` and `b` are two valid schedules (the demand of two separate sets of jobs); return the schedule for both sets of jobs combined, in **O(|a| + |b|)**.
+
+- Edge cases: either side is empty, the two sides start or end at the same time, one interval completely contains another, one piece of `a` spans several pieces of `b`, and pieces that touch without overlapping (adjacent intervals with the same number of machines must be merged).
+- You should first work out when "the current time `t`" has to advance to the next event.
+
+## Stage 2 — Divide and conquer
+
+```cpp
+struct JobRequest {
+    std::int64_t start;
+    std::int64_t end;
+};
+
+Schedule satisfying_schedule(std::span<const JobRequest> jobs);
+```
+
+`satisfying_schedule(jobs)`: `jobs` is a `std::span<const JobRequest>`; return the valid schedule in **O(n log n)**, using the structure of merge sort (with Stage 1's merge as the combine step). An empty `jobs` returns an empty schedule; a job with `start ≥ end` throws `std::invalid_argument`.
+
+## Stage 3 — Real-world extension: online accumulation (the LSM approach)
+
+```cpp
+class IncrementalPlanner {
+public:
+    void add(JobRequest job);
+    Schedule schedule() const;
+    std::int64_t peak() const;
+    std::size_t size() const;
+};
+```
+
+`IncrementalPlanner`: jobs arrive one at a time, and you may be asked for the current schedule at any moment.
+
+- `add(job)`: amortized **O(log n)**. Don't recompute everything every time (a `PERF` test checks this): keep several small schedules whose sizes grow geometrically (merge them the way a binary counter carries, which is exactly the LSM-tree approach). A job with `start ≥ end` throws `std::invalid_argument` and leaves the planner unchanged.
+- `schedule()`: return the schedule of all the jobs so far, in O(n).
+- `peak()`: the largest number of machines needed at the same time so far; O(n) is fine.
+- `size()`: the number of jobs added.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why use divide and conquer for this problem instead of sorting all the endpoints and sweeping once? How do the complexity and the constant factors of the sweep-line method (sort + sweep) compare?
+2. What is the correctness invariant of `merge_schedules`? Which events can `t` skip over in a single step?
+3. If you turned Stage 3 into a real LSM tree, when would compaction be triggered? What are read amplification and write amplification?
+
+---
+
+**Official solution:** [Problem Set 2 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/b06b8a8baf9b15f98947e75bae55b8bf_MIT6_006S20_ps2-solutions.pdf). Read it after you finish.

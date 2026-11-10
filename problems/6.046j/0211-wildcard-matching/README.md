@@ -1,6 +1,6 @@
 ---
-title: Wildcard Matching（用 FFT 做字串比對）
-unit: 02 · FFT 與 B-Trees（PS2）
+title: Wildcard Matching (string matching with FFT)
+unit: 02 · FFT and B-Trees (PS2)
 source: 6.046J PS2 Problem 2-1
 pdf: materials/6.046j/psets/ps02/questions.pdf
 answer: materials/6.046j/psets/ps02/solutions.pdf
@@ -11,37 +11,73 @@ minutes: 90
 
 # 0211 · Wildcard Matching
 
-> **實務上為什麼會遇到**：序列分析（DNA 片段比對）和日誌掃描常見帶萬用字元的固定樣式。KMP 這類演算法處理不了 `*`，一旦不能靠失敗函數，把比對改寫成卷積就是標準解法。
+**Original problem:** [Problem Set 2](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/4a1b44e7e3f34aa85adb782d70048210_MIT6_046JS15_pset2.pdf) · **Read first:** [Divide & Conquer: FFT](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/3dc84e78914f226665357234d6f4e25c_MIT6_046JS15_lec03.pdf)
 
-文字 `text` 不含萬用字元，樣式 `pattern` 中的 `*` 恰好比對**一個**任意字元，其他字元要完全相同。回傳所有比對位置 `j`，也就是 `pattern` 對上 `text[j..j+m-1]`，遞增排序。
+> **Why this comes up in practice:** sequence analysis (matching DNA fragments) and log scanning often use fixed patterns with wildcards. Algorithms like KMP can't handle `*`, and once you can't rely on a failure function, rewriting the matching as a convolution is the standard solution.
 
-共通規則：
+## Original problem
 
-- 含字母表以外的字元時丟 `std::invalid_argument`（`*` 只能出現在 `pattern`）。
-- 空 `pattern` 比對所有位置 `0..n`（含 `n`）。`pattern` 比 `text` 長時回傳空。
+6.046J PS2 Problem 2-1 ("Pattern Matching") gives a source string S[0..n−1] of length n over the symbols a and b, and a pattern P[0..m−1] of length m, with m much smaller than n, over the symbols a, b, and ∗. The wildcard ∗ matches any single symbol, a or b, while all other symbols have to be equal. The answer M lists, in sorted order, every position j where P matches S[j..j+|P|−1]. For example, S = ababbab and P = ab∗ give M = [0, 2].
 
-## Stage 1 — 直接比對
+- (a) Describe a simple brute-force algorithm that runs in O(nm) time.
+- (b) Solve the problem by reducing it to polynomial multiplication: explain how to turn S and P into polynomials whose product determines M, and illustrate both the encoding and the way you read M off the product on the example above.
+- (c) If you combine part (b) with the FFT for polynomial multiplication from Lecture 3, what is the running time?
+- (d) Now the text is a DNA strand D[0..n−1] over A, C, G, and T, and the pattern P[0..m−1] is over A, C, G, T, and ∗. The output is again the sorted list of match positions; for example, D = ACGACCAT and P = AC∗A give M = [0, 3]. Building on parts (b) and (c), give an efficient algorithm for this alphabet and run it on that example.
 
-`match_naive(text, pattern)`：字母表是 `{a, b}`，最壞 O(nm)。
+## Your task
 
-## Stage 2 — 轉成卷積
+The text `text` contains no wildcards. In the pattern `pattern`, `*` matches exactly **one** arbitrary character, and every other character must match exactly. Return every match position `j`, that is, every `j` at which `pattern` lines up with `text[j..j+m-1]`, in increasing order.
 
-`match_fft(text, pattern)`：字母表同上，**O((n+m) log (n+m))**。把 [`0201`](../0201-fft-polynomial/README.md) 寫好的 `fft` 複製過來。
+Rules for every stage:
 
-把 `a` 編成 `1`、`b` 編成 `-1`、`*` 編成 `0`，反轉樣式，相乘一次，乘積的第 `m-1+j` 項就是樣式在位置 `j` 的「符合程度」。請自己想清楚什麼情況算命中，以及為什麼。
+- Throw `std::invalid_argument` if a string contains a character outside the alphabet (`*` may appear only in `pattern`).
+- An empty `pattern` matches at every position `0..n` (including `n`). If `pattern` is longer than `text`, return an empty result.
 
-**數值合約**：係數只有 `0、±1`，乘積的絕對值不超過 `m`，比 0201 的合約寬鬆很多，四捨五入一定正確。但只比較 `llround` 的結果，不要用浮點數直接比大小。
+Stage 1 is part (a), Stage 2 is parts (b) and (c), and Stage 3 generalizes part (d) to any alphabet through a binary encoding. You leave the analysis to the tests and the interview follow-ups.
 
-測試有最壞情況：每個位置都要比到最後一個字元才失敗，直接比對會超時。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 3 — 任意字母表
+## Stage 1 — Direct matching
 
-`match_alphabet(text, pattern, alphabet)`：`alphabet` 是字母表（不可為空、不可含 `*`、不可重複，否則丟 `std::invalid_argument`）。
+```cpp
+std::vector<std::size_t> match_naive(std::string_view text, std::string_view pattern);
+```
 
-用二元編碼把每個字元轉成 `k` 個 `{a, b}`，然後呼叫 Stage 2。`*` 要展開成 `k` 個 `*`。編碼後比對可能落在字元中間，要過濾掉：編碼後的第 3 位對應到原文哪一格？
+`match_naive(text, pattern)`: the alphabet is `{a, b}`. O(nm) in the worst case.
 
-## 面試追問
+## Stage 2 — Turning it into a convolution
 
-1. 正確的命中條件是什麼？為什麼 `1` 和 `-1` 的編碼可以用乘積判斷，改成 `1` 和 `0` 就不行？
-2. `alphabet` 很大時（例如整個 Unicode），二元編碼把長度放大 `log σ` 倍。不靠編碼的做法是什麼？（提示：`Σ P[j](P[j] − T[j])²`。）
-3. 如果 `pattern` 很短但 `text` 非常長，要如何切塊把 FFT 的成本從 `O(n log n)` 降到 `O(n log m)`？
+```cpp
+std::vector<std::size_t> match_fft(std::string_view text, std::string_view pattern);
+```
+
+`match_fft(text, pattern)`: the same alphabet, in **O((n+m) log (n+m))**. Copy over the `fft` you wrote in [`0201`](../0201-fft-polynomial/README.md).
+
+Encode `a` as `1`, `b` as `-1`, and `*` as `0`, reverse the pattern, and multiply once: term `m-1+j` of the product is the pattern's "degree of agreement" at position `j`. Work out for yourself what counts as a match, and why.
+
+**Numeric contract:** the coefficients are only `0, ±1`, so no product term exceeds `m` in absolute value. That is far looser than the 0201 contract, so rounding is always correct. Still, compare only the results of `llround`; never compare floating-point values directly.
+
+The tests include the worst case: at every position the match fails only at the last character, so direct matching times out.
+
+## Stage 3 — Any alphabet
+
+```cpp
+std::vector<std::size_t> match_alphabet(std::string_view text, std::string_view pattern,
+                                        std::string_view alphabet);
+```
+
+`match_alphabet(text, pattern, alphabet)`: `alphabet` is the alphabet; it must not be empty, contain `*`, or repeat a character (otherwise throw `std::invalid_argument`).
+
+Use a binary encoding to turn each character into `k` symbols from `{a, b}`, then call Stage 2. Each `*` expands into `k` copies of `*`. After encoding, a match can start in the middle of a character, and you must filter those out: which position of the original text does bit 3 of the encoded string belong to?
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. What is the correct match condition? Why can the product decide it with the `1` and `-1` encoding, but not with `1` and `0`?
+2. When `alphabet` is large (say, all of Unicode), the binary encoding stretches the length by a factor of `log σ`. What approach works without an encoding? (Hint: `Σ P[j](P[j] − T[j])²`.)
+3. If `pattern` is short but `text` is very long, how do you split the work into blocks to bring the FFT cost down from `O(n log n)` to `O(n log m)`?
+
+---
+
+**Official solution:** [Solutions to Problem Set 2](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d608c09d3f727411722e3ff5a95b103f_MIT6_046JS15_pset2sols.pdf). Read it after you finish.

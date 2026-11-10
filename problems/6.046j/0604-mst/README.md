@@ -1,6 +1,6 @@
 ---
-title: Minimum Spanning Tree（Kruskal、Prim、clustering）
-unit: 06 · Augmentation、APSP 與 MST（PS6）
+title: Minimum Spanning Tree (Kruskal, Prim, clustering)
+unit: 06 · Augmentation, APSP, and MST (PS6)
 source: 6.046J Lecture 12
 pdf: materials/6.046j/lectures/lec12.pdf
 read: materials/6.046j/lectures/lec12.pdf
@@ -10,28 +10,63 @@ minutes: 80
 
 # 0604 · Minimum Spanning Tree
 
-> **實務上為什麼會遇到**：資料中心 cabling 成本、影像分割、single-linkage clustering，以及把「在分散節點之間建最便宜的連通骨幹」這類需求，都是 MST。
+**Based on:** [Greedy Algorithms: Minimum Spanning Tree](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/4a7fdddff3bc419c70bb470106a1663a_MIT6_046JS15_lec12.pdf) · **Read first:** [Greedy Algorithms: Minimum Spanning Tree](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/4a7fdddff3bc419c70bb470106a1663a_MIT6_046JS15_lec12.pdf)
 
-無向圖，邊 `WeightedEdge{u, v, w}`，權重可重複。回傳的是輸入 `edges` 的索引。圖可以不連通，此時算的是 minimum spanning **forest**。
+> **Why this comes up in practice:** data center cabling costs, image segmentation, single-linkage clustering, and any requirement like "build the cheapest backbone that connects scattered nodes" are all MSTs.
 
-Union-Find 請沿用 0402 的成果（或重寫一次），不會單獨測試。一次只看一關。
+## Your task
+
+The graph is undirected, with edges `WeightedEdge{u, v, w}`, and weights may repeat. You return indices into the input `edges`. The graph may be disconnected, in which case you compute a minimum spanning **forest**.
+
+Reuse your Union-Find from 0402 (or write it again); it is not tested on its own.
+
+You implement Kruskal and Prim from Lecture 12, then use them for single-linkage clustering.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
 
 ## Stage 1 — Kruskal
 
-`SpanningForest kruskal(int n, std::span<const WeightedEdge> edges)`，其中 `SpanningForest{total, edges}`。O(E log E)。
+```cpp
+struct WeightedEdge {
+    int u = 0;
+    int v = 0;
+    long long w = 0;
+};
 
-邊界：沒有邊、平行邊、不連通。
+struct SpanningForest {
+    long long total = 0;
+    std::vector<int> edges;
+};
+
+SpanningForest kruskal(int n, std::span<const WeightedEdge> edges);
+```
+
+`SpanningForest kruskal(int n, std::span<const WeightedEdge> edges)`, where `SpanningForest{total, edges}`. O(E log E).
+
+Edge cases: no edges, parallel edges, and a disconnected graph.
 
 ## Stage 2 — Prim
 
-`SpanningForest prim(int n, std::span<const WeightedEdge> edges)`：binary heap 版本，O(E log V)。不連通時要從每個未走訪的連通元件各跑一次。結果的 `total` 必須等於 Kruskal。
+```cpp
+SpanningForest prim(int n, std::span<const WeightedEdge> edges);
+```
 
-## Stage 3 — 實務延伸：single-linkage clustering
+`SpanningForest prim(int n, std::span<const WeightedEdge> edges)`: the binary-heap version, O(E log V). If the graph is disconnected, run it once from each connected component that hasn't been visited yet. The resulting `total` must equal Kruskal's.
 
-`std::vector<int> cluster(int n, std::span<const WeightedEdge> edges, int k)`：把頂點分成恰好 `k` 群（`1 ≤ k ≤ n`，輸入保證連通），讓群與群之間的最小邊盡可能大（maximum spacing）。回傳每個頂點的群編號 `0..k-1`，編號依各群最小頂點編號遞增排列。
+## Stage 3 — Real-world extension: single-linkage clustering
 
-## 面試追問
+```cpp
+std::vector<int> cluster(int n, std::span<const WeightedEdge> edges, int k);
+```
 
-1. Cut property 和 cycle property 分別保證了什麼？Prim 和 Kruskal 各靠哪一個？
-2. 權重有重複時，MST 還唯一嗎？如何在 Kruskal 的過程中判斷？
-3. Prim 用 binary heap 和 Fibonacci heap，在稠密圖上差多少？實務上為什麼很少用後者？
+`std::vector<int> cluster(int n, std::span<const WeightedEdge> edges, int k)`: split the vertices into exactly `k` clusters (`1 ≤ k ≤ n`, and the input is guaranteed to be connected) so that the lightest edge between two different clusters is as heavy as possible (maximum spacing). Return each vertex's cluster number in `0..k-1`, numbering the clusters in increasing order of their smallest vertex.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. What does the cut property guarantee, and what does the cycle property guarantee? Which one does Prim rely on, and which one does Kruskal?
+2. Is the MST still unique when weights repeat? How can you tell during a Kruskal run?
+3. On a dense graph, how much difference does it make whether Prim uses a binary heap or a Fibonacci heap? Why is the latter rarely used in practice?

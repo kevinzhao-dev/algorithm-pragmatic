@@ -1,6 +1,6 @@
 ---
-title: DAG Relaxation、最短路徑樹與 Critical Path
-unit: 06 · Weighted Shortest Paths（PS6）
+title: DAG Relaxation, Shortest-Path Trees, and Critical Path
+unit: 06 · Weighted Shortest Paths (PS6)
 source: 6.006 Lecture 11, Recitation 11
 pdf: materials/6.006/lectures/lec11.pdf
 read: materials/6.006/recitations/rec11.pdf
@@ -8,11 +8,15 @@ kind: code
 minutes: 100
 ---
 
-# 0601 · DAG Relaxation、最短路徑樹與 Critical Path
+# 0601 · DAG Relaxation, Shortest-Path Trees, and Critical Path
 
-> **實務上為什麼會遇到**：CI pipeline 的總時長、專案排程的 critical path、資料管線的端到端延遲，算的都是 DAG 上的最長或最短路徑。只要圖沒有環，就不需要 Bellman-Ford 或 Dijkstra。
+**Based on:** [Lecture 11: Weighted Shortest Paths notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/aa57a9785adf925bc85c1920f53755a0_MIT6_006S20_lec11.pdf) · **Read first:** [Recitation 11 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/77ff36ad54779575d9ba8d8687f91b5b_MIT6_006S20_r11.pdf)
 
-頂點編號 `0 … n-1`。起點不存在時丟 `std::out_of_range`，後面每關都一樣。一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** the total duration of a CI pipeline, the critical path of a project schedule, and the end-to-end latency of a data pipeline are all longest or shortest paths on a DAG. As long as the graph has no cycles, you need neither Bellman-Ford nor Dijkstra.
+
+## Your task
+
+Vertices are numbered `0 … n-1`. Throw `std::out_of_range` when the source doesn't exist; the same holds in every later stage.
 
 ```cpp
 struct Arc { int to; std::int64_t weight; };
@@ -21,22 +25,37 @@ inline constexpr std::int64_t kUnreachable = std::numeric_limits<std::int64_t>::
 inline constexpr int kNoParent = -1;
 ```
 
-## Stage 1 — DAG 上的最短路徑
+You compute shortest paths on a DAG with DAG Relaxation, rebuild a shortest-path tree from known distances on any graph, and then plan a CI pipeline and find its critical path.
 
-`dag_shortest_paths(g, s)` 回傳 `dist`：`dist[v]` 是 `s` 到 `v` 的最短路徑權重，到不了是 `kUnreachable`。權重可以是負的。圖裡有 directed cycle 時丟 `std::invalid_argument`（不管 cycle 在哪裡）。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-要 O(V + E)，頂點可能有上百萬個。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 從距離還原最短路徑樹
+## Stage 1 — Shortest paths on a DAG
 
-`shortest_path_tree(g, s, dist)`：已知 `dist` 是**任意**圖從 `s` 出發的真實最短距離（圖不一定是 DAG，保證沒有從 `s` 可達的負環）。回傳 `parent`：
+```cpp
+std::vector<std::int64_t> dag_shortest_paths(const WeightedGraph& g, int source);
+```
 
-- 對每個可達的 `v != s`，邊 `parent[v] → v` 必須存在且滿足 `dist[parent[v]] + w == dist[v]`，而且沿著 `parent` 一路往回走一定會回到 `s`。
-- `s` 和到不了的頂點是 `kNoParent`。
+`dag_shortest_paths(g, s)` returns `dist`: `dist[v]` is the shortest-path weight from `s` to `v`, or `kUnreachable` if `v` is unreachable. Weights may be negative. Throw `std::invalid_argument` if the graph has a directed cycle (wherever that cycle is).
 
-要 O(V + E)。圖裡可能有權重總和為 0 的環。
+Must run in O(V + E); there may be millions of vertices.
 
-## Stage 3 — 實務延伸：CI Pipeline
+## Stage 2 — Recovering the shortest-path tree from distances
+
+```cpp
+std::vector<int> shortest_path_tree(const WeightedGraph& g, int source,
+                                    std::span<const std::int64_t> dist);
+```
+
+`shortest_path_tree(g, s, dist)`: `dist` is known to hold the true shortest distances from `s` in an **arbitrary** graph (not necessarily a DAG, but with no negative cycle reachable from `s`). Return `parent`:
+
+- For every reachable `v != s`, the edge `parent[v] → v` must exist and satisfy `dist[parent[v]] + w == dist[v]`, and following `parent` back from `v` must always lead to `s`.
+- `s` and unreachable vertices get `kNoParent`.
+
+Must run in O(V + E). The graph may contain cycles whose total weight is 0.
+
+## Stage 3 — Real-world extension: CI Pipeline
 
 ```cpp
 struct Job {
@@ -51,18 +70,24 @@ struct PipelinePlan {
 };
 ```
 
-機器數量沒有限制，能開始的工作會立刻開始。`plan_pipeline(jobs)` 回傳：
+```cpp
+PipelinePlan plan_pipeline(std::span<const Job> jobs);
+```
 
-- `earliest_start[i]`：工作 `i` 最早的開始時間；`makespan` 是所有工作都做完的時間。
-- `slack[i]`：工作 `i` 最多可以延後多久，整條 pipeline 仍然在 `makespan` 內完成。
-- `critical_path`：一條前後有相依關係、首尾相接的工作鏈，第一個工作從時間 0 開始，最後一個工作在 `makespan` 結束。
+There is no limit on the number of machines, and a job starts as soon as it can. `plan_pipeline(jobs)` returns:
 
-沒有工作時全部是空的、`makespan` 為 0。相依成環丟 `std::invalid_argument`，`depends_on` 裡有不存在的工作丟 `std::out_of_range`。
+- `earliest_start[i]`: the earliest time job `i` can start; `makespan` is the time when every job has finished.
+- `slack[i]`: how long job `i` can be delayed at most while the whole pipeline still finishes within `makespan`.
+- `critical_path`: a chain of jobs in which each job depends on the one before it and starts right when that one ends. The first job starts at time 0, and the last one ends at `makespan`.
 
-要 O(V + E)。
+With no jobs, everything is empty and `makespan` is 0. Throw `std::invalid_argument` if the dependencies form a cycle, and `std::out_of_range` if `depends_on` names a job that doesn't exist.
 
-## 面試追問
+Must run in O(V + E).
 
-1. DAG Relaxation 為什麼只要依拓撲順序把每條邊 relax 一次就夠？用歸納法講給面試官聽。
-2. Stage 2 為什麼不能「每個頂點隨便挑一條滿足等式的進入邊」？零權重環會造成什麼？
-3. Longest path 在一般圖上是 NP-hard，為什麼在 DAG 上卻這麼容易？`slack` 為 0 的工作就一定在 critical path 上嗎？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is it enough for DAG Relaxation to relax each edge once, in topological order? Explain it to the interviewer by induction.
+2. In Stage 2, why can't each vertex just pick any incoming edge that satisfies the equation? What would a zero-weight cycle cause?
+3. Longest path is NP-hard on general graphs, so why is it this easy on a DAG? Is a job whose `slack` is 0 always on the critical path?

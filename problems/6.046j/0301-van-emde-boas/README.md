@@ -1,6 +1,6 @@
 ---
 title: van Emde Boas Tree
-unit: 03 · van Emde Boas（PS3）
+unit: 03 · van Emde Boas (PS3)
 source: 6.046J Lecture 4
 pdf: materials/6.046j/lectures/lec04.pdf
 read: materials/6.046j/lectures/lec04.pdf
@@ -10,51 +10,101 @@ minutes: 240
 
 # 0301 · van Emde Boas Tree
 
-> **實務上為什麼會遇到**：路由表要在固定大小的位址空間裡找「不大於這個 IP 的最大起點」。平衡樹要 O(log n)，vEB 把時間壓到 O(log log u)，跟集合大小無關。這是少數能打破比較模型下界的資料結構之一。
+**Based on:** [Divide & Conquer: Van Emde Boas Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/49c8fa24dffce58052c90d46ac800387_MIT6_046JS15_lec04.pdf) · **Read first:** [Divide & Conquer: Van Emde Boas Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/49c8fa24dffce58052c90d46ac800387_MIT6_046JS15_lec04.pdf)
 
-維護 `0..u-1` 中的整數集合，`u = 2^bits`，`1 ≤ bits ≤ 64`（否則丟 `std::invalid_argument`）。key 超出範圍時丟 `std::out_of_range`。
+> **Why this comes up in practice:** a routing table must find "the largest start address that is not greater than this IP" in a fixed-size address space. A balanced tree takes O(log n); vEB brings that down to O(log log u), independent of the size of the set. It is one of the few data structures that beat the lower bound of the comparison model.
 
-把 key 切成兩段：高 `bits - bits/2` 位是 cluster 編號，低 `bits/2` 位是 cluster 內的位置。結構如 Lecture 4：每個節點有 `min`、`max`、`summary` 和各個 `cluster`，而且 **`min` 不存進 cluster**。把 `bits == 1` 當 base case。
+## Your task
 
-## 成本模型
+Maintain a set of integers in `0..u-1`, where `u = 2^bits` and `1 ≤ bits ≤ 64` (otherwise throw `std::invalid_argument`). Throw `std::out_of_range` when a key is out of range.
 
-`visits()` 回傳累積進入過多少個 vEB 節點，也就是每一次遞迴呼叫（包含對根的呼叫）都要 `+1`，只讀 `min`、`max` 不算。測試用它驗證 T(u) = T(√u) + O(1)。每個操作最多可以進入 `2·L + 2` 個節點，`L` 是遞迴層數 `⌈log₂ bits⌉ + 1`。
+Split a key into two parts: the high `bits - bits/2` bits are the cluster number, and the low `bits/2` bits are the position within the cluster. The structure follows Lecture 4: each node has a `min`, a `max`, a `summary`, and its `cluster`s, and **`min` is not stored in any cluster**. Use `bits == 1` as the base case.
 
-## Stage 1 — 新增與後繼
+You build the structure in steps: insertion and successor, then deletion and predecessor, then a sparse version that handles 64-bit keys, and finally a routing table on top of it.
 
-`insert`（新增回傳 `true`，已存在回傳 `false`）、`contains`、`min`、`max`、`size`、`empty`，以及 `successor(x)`：回傳**嚴格大於** `x` 的最小元素，沒有時回傳 `std::nullopt`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-這一關的 cluster 可以用陣列，但不要在這裡寫死 16 位元，Stage 3 會換成 64。注意 `successor` 只有一條路：要嘛遞迴進 cluster，要嘛遞迴進 summary，不能兩邊都做。
+## Cost model
 
-## Stage 2 — 刪除與前驅
+`visits()` returns the total number of vEB nodes entered so far: every recursive call, including the call on the root, adds `+1`, while merely reading `min` or `max` doesn't count. The tests use it to verify T(u) = T(√u) + O(1). Each operation may enter at most `2·L + 2` nodes, where `L` is the number of recursion levels, `⌈log₂ bits⌉ + 1`.
 
-- `erase(x)`：存在時刪除並回傳 `true`。`min` 被刪時，要從第一個非空 cluster 拉新的 `min` 上來；`max` 被刪時要從 summary 重建。
-- `predecessor(x)`：回傳嚴格小於 `x` 的最大元素。別忘了 `min` 不在 cluster 裡。
+## Stage 1 — Insertion and successor
 
-## Stage 3 — 稀疏宇集
+```cpp
+class VanEmdeBoas {
+public:
+    explicit VanEmdeBoas(int universe_bits);
 
-把 cluster 改成只保存非空的（`std::unordered_map`），讓 `bits = 64` 也能跑：
+    std::size_t size() const;
+    bool empty() const;
+    std::optional<std::uint64_t> min() const;
+    std::optional<std::uint64_t> max() const;
+    bool contains(std::uint64_t x) const;
+    bool insert(std::uint64_t x);
+    std::optional<std::uint64_t> successor(std::uint64_t x) const;
 
-- `node_count()`：目前存活的 vEB 節點數（包含根），必須是 `O(n log log u)`。
-- 所有元素刪光後，節點要全部釋放，`node_count()` 回到 `1`。
+    // Cost model used by the tests: the number of vEB nodes entered so far.
+    std::uint64_t visits() const;  // tested from this stage on
+};
+```
 
-注意 `1ULL << 64` 是 undefined behavior，UBSan 會抓。
+Implement `insert` (return `true` if the key is new, `false` if it already exists), `contains`, `min`, `max`, `size`, `empty`, and `successor(x)`, which returns the smallest element **strictly greater** than `x`, or `std::nullopt` if there is none.
 
-## Stage 4 — 實務延伸：路由表
+In this stage the clusters can be an array, but don't hard-code 16 bits here; Stage 3 switches to 64. Note that `successor` takes only one path: it recurses either into a cluster or into the summary, never into both.
 
-`RouteTable`：路由是 `[first, last]` 這段 IPv4 位址對應到 `port`。
+## Stage 2 — Deletion and predecessor
 
-| 操作 | 行為 |
+```cpp
+// in class VanEmdeBoas
+bool erase(std::uint64_t x);
+std::optional<std::uint64_t> predecessor(std::uint64_t x) const;
+```
+
+- `erase(x)`: if `x` is present, delete it and return `true`. When `min` is deleted, pull the new `min` up from the first non-empty cluster; when `max` is deleted, rebuild it from the summary.
+- `predecessor(x)`: return the largest element strictly less than `x`. Don't forget that `min` is not in any cluster.
+
+## Stage 3 — A sparse universe
+
+```cpp
+// in class VanEmdeBoas
+std::size_t node_count() const;
+```
+
+Change the clusters to store only the non-empty ones (`std::unordered_map`), so that `bits = 64` also works:
+
+- `node_count()`: the number of vEB nodes currently alive (including the root), which must be `O(n log log u)`.
+- A summary or cluster exists only while it holds something, so a single key needs only the root (`node_count() == 1`).
+- Once every element has been deleted, all nodes must be freed and `node_count()` returns to `1`.
+
+Note that `1ULL << 64` is undefined behavior, and UBSan will catch it.
+
+## Stage 4 — Real-world extension: a routing table
+
+```cpp
+class RouteTable {
+public:
+    bool add(std::uint32_t first, std::uint32_t last, int port);
+    bool remove(std::uint32_t first);
+    std::optional<int> lookup(std::uint32_t ip) const;
+    std::size_t size() const;
+};
+```
+
+`RouteTable`: a route maps the IPv4 address range `[first, last]` to a `port`.
+
+| Operation | Behavior |
 | --- | --- |
-| `add(first, last, port)` | 和現有路由重疊時回傳 `false` 且不變動；`first > last` 丟 `std::invalid_argument` |
-| `remove(first)` | 刪除起點剛好是 `first` 的路由，回傳是否有這條路由 |
-| `lookup(ip)` | 回傳包含 `ip` 的路由的 `port` |
-| `size()` | 路由數量 |
+| `add(first, last, port)` | If it overlaps an existing route, return `false` and change nothing; throw `std::invalid_argument` if `first > last` |
+| `remove(first)` | Delete the route whose start is exactly `first`, and return whether such a route existed |
+| `lookup(ip)` | Return the `port` of the route that contains `ip`, or `std::nullopt` if no route does |
+| `size()` | The number of routes |
 
-用 `VanEmdeBoas(32)` 存起點，每個操作的時間跟路由數無關。
+Store the start addresses in a `VanEmdeBoas(32)`, so that the time of each operation doesn't depend on the number of routes.
 
-## 面試追問
+## Interview follow-ups
 
-1. 不把 `min` 存進 cluster 這件事，為什麼讓 `insert` 的遞迴只需要走一邊？
-2. 用 `unordered_map` 之後，T(u) = T(√u) + O(1) 還成立嗎？最壞情況呢？
-3. 實務上 vEB 比 `std::set` 或 B-tree 慢的原因是什麼？什麼情況下才真的划算？
+Once you're done, answer without looking at your code:
+
+1. Why does keeping `min` out of the clusters let the recursion in `insert` go down only one side?
+2. With `unordered_map`, does T(u) = T(√u) + O(1) still hold? What about the worst case?
+3. Why is vEB slower than `std::set` or a B-tree in practice? When is it actually worth it?

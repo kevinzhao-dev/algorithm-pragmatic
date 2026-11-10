@@ -1,6 +1,6 @@
 ---
-title: 聊天室與封鎖（組合資料結構）
-unit: 02 · Sorting & Recurrences（PS2）
+title: Chat Room and Banning (composing data structures)
+unit: 02 · Sorting & Recurrences (PS2)
 source: 6.006 PS2 Problem 2-4
 pdf: materials/6.006/psets/ps2/questions.pdf
 answer: materials/6.006/psets/ps2/solutions.pdf
@@ -9,38 +9,84 @@ kind: code
 minutes: 80
 ---
 
-# 0214 · 聊天室與封鎖
+# 0214 · Chat Room and Banning
 
-> **實務上為什麼會遇到**：直播聊天室、訊息流的 moderation：把某個使用者禁言時，他過去所有的發言要立刻消失，但不能為了這件事去掃整個訊息流。這類題目的重點是把幾個簡單的結構組合起來，讓每個操作只碰到自己該碰的部分。
+**Original problem:** [Problem Set 2 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/70d9c6b212c6dfce6723259ffb429521_MIT6_006S20_ps2-questions.pdf) · **Read first:** [Lecture 2: Data Structures notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf), [Recitation 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1869dbf640ded6b31f1bd369d2001ef5_MIT6_006S20_r03.pdf)
 
-原題：一個聊天室有 `n` 位 viewer，每一個操作都要 **worst-case** 複雜度，不可靠 hash 的 expected O(1)（`Viewer` 只保證有 `<` 和 `==`；測試用 `Counted` 檢查比較次數）。你要實作 `ChatRoom<Viewer, Message>`。
+> **Why this comes up in practice:** moderating a live-stream chat or a message feed: when a user is muted, everything they have ever said must disappear immediately, but you can't scan the whole message stream to make that happen. The point of problems like this is to combine a few simple structures so that each operation touches only the parts it has to.
 
-## Stage 1 — 發言與讀取
+## Original problem
 
-| 操作 | 行為 | 複雜度 |
+6.006 PS2 Problem 2-4, "MixBookTube.tv Chat," is about a site where people chat alongside a live video-game stream. Viewers are identified by distinct integer IDs that are known in advance (as in lecture, input integers are assumed to fit in a machine word, so two of them can be compared in constant time). The chat is one linear stream of messages, each posted by some viewer, and a viewer sees the k most recent messages, where k depends on their screen size. The streamer can ban a viewer who misbehaves: from then on the viewer can't post, and all of their earlier messages are removed from the chat.
+
+Describe a database for the chat that supports the operations below, all in worst-case time, where n is the number of viewers in the database (banned or not) when the operation runs:
+
+- `build(V)`: start a new chat room with the n = |V| viewers in V, in O(n log n) time.
+- `send(v, m)`: post message m from viewer v, unless v is banned, in O(log n) time.
+- `recent(k)`: return the k most recent messages that haven't been deleted (all of them, if there are fewer than k), in O(k) time.
+- `ban(v)`: ban viewer v and delete all of v's messages, in O(n_v + log n) time, where n_v is the number of messages v sent before being banned.
+
+The answer is written; there is no code.
+
+## Your task
+
+The original problem: a chat room has `n` viewers, and every operation must meet its complexity in the **worst case**, so you can't rely on a hash table's expected O(1) (`Viewer` is only guaranteed to have `<` and `==`; the tests check the number of comparisons with `Counted`). You implement `ChatRoom<Viewer, Message>`.
+
+Stage 3 adds a per-viewer retention limit, which the original problem doesn't have.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Sending and reading
+
+```cpp
+template <typename Viewer, typename Message>
+class ChatRoom {
+public:
+    explicit ChatRoom(std::vector<Viewer> viewers,
+                      std::size_t per_viewer_limit = std::numeric_limits<std::size_t>::max());  // used in Stage 3
+
+    bool send(const Viewer& viewer, Message message);
+    std::vector<Message> recent(std::size_t k) const;
+    std::size_t message_count() const;
+};
+```
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `explicit ChatRoom(viewers)` | 建立，viewer 不重複（重複時丟 `std::invalid_argument`） | O(n log n) |
-| `send(v, m)` | 使用者 `v` 發言。`v` 不存在時回傳 `false`；成功回傳 `true` | O(log n) |
-| `recent(k)` | 回傳最新的 `k` 則訊息（不足 `k` 則時回傳全部），**最新的在最前面** | O(k) |
-| `message_count()` | 目前可見的訊息數量 | O(1) |
+| `explicit ChatRoom(viewers)` | Build the room; the viewers are distinct (throw `std::invalid_argument` on duplicates) | O(n log n) |
+| `send(v, m)` | Viewer `v` posts a message. Return `false` if `v` doesn't exist and `true` on success | O(log n) |
+| `recent(k)` | Return the `k` newest messages (all of them if there are fewer than `k`), **newest first** | O(k) |
+| `message_count()` | The number of messages currently visible | O(1) |
 
-`recent(k)` 的時間只能跟 `k` 有關，和總訊息數無關。
+The time `recent(k)` takes may depend only on `k`, not on the total number of messages.
 
-## Stage 2 — 封鎖
+## Stage 2 — Banning
 
-- `ban(v)`：封鎖 `v`，並移除 `v` 過去所有的訊息。回傳是否成功（`v` 不存在或已被封鎖時回傳 `false`）。複雜度 **O(n_v + log n)**，`n_v` 是 `v` 目前還可見的訊息數，不可以掃描其他人的訊息。
-- `is_banned(v)`：`v` 是否已被封鎖，O(log n)。
-- 被封鎖的 viewer 再 `send` 時回傳 `false`，也不會出現新訊息。
+```cpp
+// in class ChatRoom<Viewer, Message>
+bool ban(const Viewer& viewer);
+bool is_banned(const Viewer& viewer) const;
+```
 
-`recent(k)` 依然要 O(k)：做法上不可以留下「墓碑」讓 `recent` 需要略過被刪除的訊息（測試會在大量封鎖之後檢查）。
+- `ban(v)`: ban `v` and remove all of `v`'s past messages. Return whether it succeeded (return `false` if `v` doesn't exist or is already banned). Complexity **O(n_v + log n)**, where `n_v` is the number of `v`'s messages that are still visible; you must not scan anyone else's messages.
+- `is_banned(v)`: whether `v` has been banned, O(log n).
+- When a banned viewer calls `send` again, return `false`, and no new message appears.
 
-## Stage 3 — 實務延伸：每人保留上限
+`recent(k)` must still be O(k): your approach must not leave "tombstones" that `recent` has to skip over (the tests check this after a large number of bans).
 
-建構子多一個參數 `ChatRoom(viewers, per_viewer_limit)`（`≥ 1`，否則丟 `std::invalid_argument`）：每位 viewer **只保留最新的 `per_viewer_limit` 則**訊息。`send` 超過上限時，移除該 viewer 自己最舊的那一則，`send` 仍要 O(log n)。只傳一個參數時代表沒有上限。
+## Stage 3 — Real-world extension: a per-viewer retention limit
 
-## 面試追問
+The constructor takes one more argument, `ChatRoom(viewers, per_viewer_limit)` (`≥ 1`; otherwise throw `std::invalid_argument`): each viewer keeps **only their newest `per_viewer_limit`** messages. When a `send` goes over the limit, remove that viewer's own oldest message; `send` must still be O(log n). Passing only one argument means there is no limit.
 
-1. 為什麼需要「viewer → 他的訊息節點們」這層索引？只用一個雙向串列會差在哪個操作？
-2. 為什麼要 worst-case 而不是 expected 複雜度時，sorted array（或 `std::map`）比 `unordered_map` 合適？這在實際系統裡有多重要？
-3. 如果 `recent` 改成「某個 viewer 最新的 k 則」，你的結構要怎麼延伸？
-4. 多執行緒環境下，`send` 和 `ban` 會競爭什麼？你會怎麼切鎖？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why do you need the "viewer → that viewer's message nodes" index? With only a doubly linked list, which operation would fall short?
+2. When you need worst-case rather than expected complexity, why is a sorted array (or `std::map`) a better fit than `unordered_map`? How much does that matter in real systems?
+3. If `recent` became "a given viewer's k newest messages," how would you extend your structure?
+4. In a multithreaded environment, what do `send` and `ban` contend for? How would you split up the locks?
+
+---
+
+**Official solution:** [Problem Set 2 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/b06b8a8baf9b15f98947e75bae55b8bf_MIT6_006S20_ps2-solutions.pdf). Read it after you finish.

@@ -1,46 +1,96 @@
 ---
-title: 切分、合併與 Compaction（兩種尺寸的 heap）
-unit: 08 · Storage Allocation（HW6）
-source: 6.172 HW6 §6 Write-up 7–8（split／coalesce 兩種尺寸）
+title: Splitting, Coalescing, and Compaction (a two-size heap)
+unit: 08 · Storage Allocation (HW6)
+source: 6.172 HW6 §6 Write-up 7–8 (split/coalesce with two sizes)
 pdf: materials/6.172/homework/hw06/handout.pdf
 read: materials/6.172/lectures/lec11.pdf
 kind: code
 minutes: 80
 ---
 
-# 0814 · 切分、合併與 Compaction
+# 0814 · Splitting, Coalescing, and Compaction
 
-> **實務上為什麼會遇到**：配置器的 free list 能不能把散落的小塊併回大塊，決定了長時間跑下來會不會「明明還有記憶體卻配置失敗」。一旦物件可以被搬動，就能做 compaction，這正是 copying GC 和 Go 調整 stack 大小的基礎。
+**Original problem:** [HW6: Simple Storage Allocation](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/e8e29570ad0673ec3460af46536a1e04_MIT6_172F18hw6.pdf) · **Read first:** [Storage Allocation](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/68624442da6047731a33b3590cefd030_MIT6_172F18_lec11.pdf)
 
-沿用上一題的兩種尺寸：**large = 64 bytes**、**small = 32 bytes**。`TwoSizeHeap` 管理一段 `lines` 條 64-byte line 的 arena，只用 offset，不碰真實記憶體。一開始所有 line 都在 large 的 free list 上。
+> **Why this comes up in practice:** whether an allocator's free lists can merge scattered small blocks back into large ones decides whether, after a long run, it "fails to allocate even though memory is still free". Once objects can be moved, compaction becomes possible, which is exactly the basis of copying GC and of the way Go resizes stacks.
 
-## Stage 1 — 切分，不合併（Write-up 7 前半）
+## Original problem
 
-`TwoSizeHeap heap(lines, Coalesce::Never)`：
+6.172 HW6 §6 ends with two questions about the allocator for large (64-byte) and small (32-byte) objects. Neither requires an implementation:
 
-- `alloc_large()`：取一個閒置的 line，回傳 offset（64 的倍數）。沒有就回傳 `std::nullopt`。
-- `alloc_small()`：先用 small 的 free list；沒有的話拿一個閒置的 line **切半**，回傳低位那半，高位那半放進 small 的 free list。都沒有就回傳 `std::nullopt`。
-- `free_small(offset)` / `free_large(offset)`：放回對應的 free list，**不做任何合併**。
-- `free_bytes()`：目前閒置的總 bytes。
+- Write-up 7: what can you do when you need a 32-byte object but the free list holds only 64-byte entries? What happens once you have run out of space and keep breaking up large objects but never coalesce adjacent small ones back into large ones? And what can you do when you are out of space and need a 64-byte object while the free list holds only 32-byte entries?
+- Write-up 8: allocations must be contiguous in memory. Can two 32-byte objects that are not adjacent be coalesced into a 64-byte object? If so, how would you implement it?
 
-你會在測試裡親眼看到作業問的現象：一直切而不合併時，`free_bytes` 還有一大堆，large 卻配不出來。
+## Your task
 
-## Stage 2 — 合併相鄰的一半（Write-up 7 後半）
+Keep the two sizes from the previous exercise: **large = 64 bytes** and **small = 32 bytes**. `TwoSizeHeap` manages an arena of `lines` 64-byte lines, using only offsets and never touching real memory. Initially every line is on the large free list.
 
-`Coalesce::Adjacent` 模式：`free_small` 時如果同一條 line 的另一半也閒置，兩半立刻合併回閒置的 large，`alloc_large` 就能再用它。其餘行為相同，`Coalesce::Never` 模式的測試要繼續通過。
+The homework only asks you to reason about these questions; here you implement each answer, and the tests make its effects visible.
 
-## Stage 3 — 不相鄰的兩半：用 handle 搬動物件（Write-up 8）
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-兩個不相鄰的 32-byte 區塊沒辦法直接湊成 64 bytes，除非可以搬動物件。`CompactingHeap` 用 handle 間接指向物件，物件的真實位置可以改變：
+## Stage 1 — Splitting without coalescing (first half of Write-up 7)
 
-- `alloc_small()` / `alloc_large()` 回傳 `std::optional<Handle>`。
-- `deref(handle)` 回傳該物件目前的 `std::span<std::byte>`（small 32 bytes、large 64 bytes）。先前拿到的 span 在下一次會移動物件的操作後失效。
-- `free(handle)`。
-- `compact()`：把「只有一半被用的 line」兩兩配對，把一條 line 上的物件搬到另一條的空位，讓盡量多的 line 完整閒置。物件內容不可改變，handle 不可失效。完成後最多只有一條 line 是半滿的。
-- `alloc_large()` 在沒有整條閒置 line、但整體閒置空間足夠時，要自動 `compact()` 後重試。
+```cpp
+enum class Coalesce { Never, Adjacent };
 
-## 面試追問
+// offsets only; all lines start out free
+class TwoSizeHeap {
+public:
+    TwoSizeHeap(std::size_t lines, Coalesce policy);
 
-1. 只切不合併，最壞情況下記憶體會浪費到什麼程度？真實的 buddy 系統（0803）為什麼只合併 buddy，不合併任意兩塊相鄰的？
-2. 為什麼 C/C++ 的 `malloc` 不能像 `CompactingHeap` 這樣搬動物件？哪些語言或場景可以？代價是什麼？
-3. handle 多一層間接，每次存取都多一次記憶體 load。什麼情況下這個成本值得？（提示：Lecture 11 的 copying GC）
+    std::optional<std::size_t> alloc_small();
+    std::optional<std::size_t> alloc_large();
+    void free_small(std::size_t offset);
+    void free_large(std::size_t offset);
+    std::size_t free_bytes() const;
+};
+```
+
+`TwoSizeHeap heap(lines, Coalesce::Never)`:
+
+- `alloc_large()`: take an idle line and return its offset (a multiple of 64). If there is none, return `std::nullopt`.
+- `alloc_small()`: use the small free list first; otherwise take an idle line and **split it in half**, return the lower half, and put the upper half on the small free list. If neither is available, return `std::nullopt`.
+- `free_small(offset)` / `free_large(offset)`: put the block back on the matching free list, **without any coalescing**.
+- `free_bytes()`: the total number of bytes currently free.
+
+The tests let you see for yourself the effect the homework asks about: when you keep splitting without ever coalescing, `free_bytes` is still large, yet no large block can be allocated.
+
+## Stage 2 — Coalescing adjacent halves (second half of Write-up 7)
+
+`Coalesce::Adjacent` mode: on `free_small`, if the other half of the same line is also idle, merge the two halves right away back into an idle large block, which `alloc_large` can then use again. Everything else behaves the same, and the `Coalesce::Never` tests must keep passing.
+
+## Stage 3 — Non-adjacent halves: moving objects through handles (Write-up 8)
+
+```cpp
+// objects live in real memory and can be moved; callers hold handles
+class CompactingHeap {
+public:
+    using Handle = std::size_t;
+
+    explicit CompactingHeap(std::size_t lines);
+
+    std::optional<Handle> alloc_small();
+    std::optional<Handle> alloc_large();
+    void free(Handle handle);
+    std::span<std::byte> deref(Handle handle);
+    void compact();
+    std::size_t free_bytes() const;
+};
+```
+
+Two non-adjacent 32-byte blocks can't simply be combined into 64 bytes unless objects can be moved. `CompactingHeap` refers to objects indirectly through handles, so an object's real location can change:
+
+- `alloc_small()` / `alloc_large()` return `std::optional<Handle>`.
+- `deref(handle)` returns the object's current `std::span<std::byte>` (32 bytes for small, 64 bytes for large). A span obtained earlier becomes invalid after the next operation that can move objects.
+- `free(handle)`.
+- `compact()`: pair up the "lines with only one half in use", and move the object on one line of each pair into the empty half of the other, so that as many lines as possible become entirely free. Object contents must not change, and handles must not become invalid. Afterwards at most one line is half full.
+- When there is no wholly idle line but enough free space overall, `alloc_large()` must `compact()` automatically and then retry.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. If you only split and never coalesce, how much memory can be wasted in the worst case? Why does a real buddy system (0803) merge only buddies and not any two adjacent blocks?
+2. Why can't C/C++'s `malloc` move objects the way `CompactingHeap` does? Which languages or settings can? What does it cost?
+3. A handle adds a level of indirection, so every access costs one more memory load. When is that cost worth paying? (Hint: Lecture 11's copying GC)

@@ -1,7 +1,7 @@
 ---
-title: Hash Table 的鎖切分（striping 與 false sharing）
-unit: 12 · Deterministic Execution（HW9）
-source: 6.172 HW9 §5 Write-up 1–2（hashlock、fair insert）
+title: Hash Table Lock Striping (striping and false sharing)
+unit: 12 · Deterministic Execution (HW9)
+source: 6.172 HW9 §5 Write-up 1–2 (hashlock, fair insert)
 pdf: materials/6.172/homework/hw09/handout.pdf
 read: materials/6.172/lectures/lec16.pdf
 kind: code
@@ -9,36 +9,98 @@ minutes: 90
 sanitizer: tsan
 ---
 
-# 1212 · Hash Table 的鎖切分
+# 1212 · Hash Table Lock Striping
 
-> **實務上為什麼會遇到**：`ConcurrentHashMap`、Redis 的 slot、資料庫的 latch manager 都在做同一件事：一把大鎖太慢，每一列一把鎖又太佔空間，所以把鎖切成 stripe。切完之後，新的問題是 false sharing 和鎖的取得順序。
+**Original problem:** [HW9: Deterministic Execution](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/ddcc1a4046b1893ca38211dc54be44fc_MIT6_172F18hw9.pdf) · **Read first:** [Nondeterministic Parallel Programming](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/e4fe97d2a250b57bb1e330fba8cf5992_MIT6_172F18_lec16.pdf)
 
-把 open-addressing table（線性探測）一步步改成多執行緒版本。key 都不為 0，**同一時間不會有兩個 thread 插入同一個 key**。key `k` 的 home slot 是 `k % capacity`（capacity 是 2 的次方），slot `s` 屬於 stripe `s % stripes`（stripes 也是 2 的次方，且 ≤ capacity）。`insert` 在 table 滿時回傳 `false`，相同 key 再插入時覆寫 value。
+> **Why this comes up in practice:** `ConcurrentHashMap`, Redis slots, and a database's latch manager all do the same thing: one big lock is too slow and one lock per row takes too much space, so the locks are split into stripes. Once they're split, the new problems are false sharing and the order in which locks are taken.
 
-全部用模板參數 `Mutex`（預設 `std::mutex`）；測試會換成 `_shared/08_dsched.hpp` 的 `dsched::Mutex` 窮舉 interleaving，也會用 `std::mutex` 跑 TSan。
+## Original problem
 
-## Stage 1 — 一把大鎖
+6.172 HW9 §5 (Hashlocking) runs the homework's open-addressing hash table on several threads (`make hashtable-mt` uses 10), where it fails without synchronization. A single lock for the whole table, as in `hashtable_insert_locked`, would be heavily contended. Splitting the lock helps, but one lock per table row costs too much memory and cache, so the handout settles on one lock per hash value, called a "hashlock". You switch `hashtable_fill` over to `hashtable_insert_fair`, a basic hashlock insert. Its locks are an array of 16 pthread mutexes indexed by the slot number modulo 16, and while it probes, it locks the next slot before unlocking the current one.
 
-`CoarseTable(capacity)`：`insert`、`find`（`std::optional<std::uint64_t>`）都拿同一把鎖。
+- Write-up 1: is the hashlock implementation in `hashlock.c` prone to false sharing? Why or why not?
+- Write-up 2: what problem does the fairness scheme in `hashtable_insert_fair` introduce? Explain it, or demonstrate the behavior you see.
 
-## Stage 2 — 鎖切分（Write-up 1）
+## Your task
 
-`StripedTable(capacity, stripes)`：一個 slot 用它所屬 stripe 的鎖保護。`insert` 從 home slot 開始探測，**一次只持有一把鎖**：鎖住 slot 的 stripe、看一下這格、放開，再換下一格。
+Turn an open-addressing table (linear probing) into a multithreaded version, one step at a time. Keys are never 0, and **no two threads ever insert the same key at the same time**. Key `k`'s home slot is `k % capacity` (capacity is a power of 2), and slot `s` belongs to stripe `s % stripes` (stripes is also a power of 2, and ≤ capacity). `insert` returns `false` when the table is full, and inserting an existing key again overwrites its value.
 
-另外提供 `stripe_address(i)`（第 i 個 stripe 的鎖的位址）。stripe 陣列要避免 false sharing：相鄰 stripe 的位址必須至少差 64 bytes（`alignas(64)` 或 padding）。作業問：你的 stripe 陣列有 false sharing 嗎？為什麼？
+Everything takes a template parameter `Mutex` (default `std::mutex`); the tests swap in `dsched::Mutex` from `_shared/08_dsched.hpp` to enumerate interleavings, and also run TSan with `std::mutex`.
 
-## Stage 3 — 作業的「fair」插入會出事（Write-up 2）
+Where the homework asks two written questions, here you build all four tables, including the one that deadlocks, and let the tests show what goes wrong.
 
-`FairTable(capacity, stripes)`：作業的 `hashtable_insert_fair` 的做法：沿著探測路徑走時，**先拿到下一格的鎖，才放掉目前這格的鎖**（如果下一格屬於不同 stripe，同 stripe 就不用動）。`find` 比照辦理。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-你要**照這個規格寫**，然後看測試示範它為什麼有問題：測試會窮舉 interleaving，找出一個真的會死鎖的排程。（這題故意要求你實作有 bug 的版本。）
+## Stage 1 — One big lock
 
-## Stage 4 — 用全域順序修掉
+```cpp
+template <typename Mutex = std::mutex>
+class CoarseTable {
+public:
+    explicit CoarseTable(std::size_t capacity);
 
-`OrderedFairTable(capacity, stripes)`：同樣沿路往前走，但**只有當下一格的 stripe 編號比目前大時才拿著舊鎖換新鎖**；一旦下一格的 stripe 編號較小（繞過 stripe 邊界），先放掉舊鎖再拿新鎖。這樣鎖的取得順序有全域單調性，不可能形成環。
+    bool insert(std::uint64_t key, std::uint64_t value);
+    std::optional<std::uint64_t> find(std::uint64_t key) const;
+};
+```
 
-## 面試追問
+`CoarseTable(capacity)`: `insert` and `find` (`std::optional<std::uint64_t>`) both take the same lock.
 
-1. 把 `pthread_mutex_t` 緊密排成陣列會有 false sharing，為什麼這對 lock striping 特別傷？Apple Silicon 的 cache line 是多大？
-2. Stage 3 的死鎖最少需要幾個 thread？為什麼作業的 16 個 lock、10 個 thread 不見得會發生？Stage 2 的做法完全沒有死鎖，代價是什麼？
-3. 相同 key 被兩個 thread 同時 insert 時，Stage 2 會發生什麼事？要怎麼處理？（提示：放棄 hand-over-hand 後，探測途中別人插入的 key 可能出現在你看過的位置之後。）
+## Stage 2 — Lock striping (Write-up 1)
+
+```cpp
+template <typename Mutex = std::mutex>
+class StripedTable {
+public:
+    StripedTable(std::size_t capacity, std::size_t stripes);
+
+    bool insert(std::uint64_t key, std::uint64_t value);
+    std::optional<std::uint64_t> find(std::uint64_t key) const;
+    const void* stripe_address(std::size_t stripe) const;
+};
+```
+
+`StripedTable(capacity, stripes)`: each slot is protected by the lock of the stripe it belongs to. `insert` probes from the home slot and **holds only one lock at a time**: lock the slot's stripe, look at the slot, unlock it, then move on to the next slot.
+
+Also provide `stripe_address(i)` (the address of the lock of stripe i). The stripe array must avoid false sharing: each stripe's lock must start at a 64-byte-aligned address, and the addresses of adjacent stripes must be at least 64 bytes apart. Padding alone is not enough, because the tests also check the alignment; declare the stripe type with `alignas(64)`. The homework asks: does your stripe array have false sharing? Why?
+
+## Stage 3 — The homework's "fair" insert goes wrong (Write-up 2)
+
+```cpp
+template <typename Mutex = std::mutex>
+class FairTable {
+public:
+    FairTable(std::size_t capacity, std::size_t stripes);
+
+    bool insert(std::uint64_t key, std::uint64_t value);
+    std::optional<std::uint64_t> find(std::uint64_t key) const;
+};
+```
+
+`FairTable(capacity, stripes)`: the approach of the homework's `hashtable_insert_fair`. As it walks the probe path, it **acquires the next slot's lock before releasing the current slot's lock** (when the next slot belongs to a different stripe; within the same stripe, there is nothing to do). `find` works the same way.
+
+You must **write it exactly to this spec**, and then watch the tests demonstrate why it is broken: they enumerate interleavings and find a schedule that really deadlocks. (This exercise deliberately asks you to implement the buggy version.)
+
+## Stage 4 — Fix it with a global order
+
+```cpp
+template <typename Mutex = std::mutex>
+class OrderedFairTable {
+public:
+    OrderedFairTable(std::size_t capacity, std::size_t stripes);
+
+    bool insert(std::uint64_t key, std::uint64_t value);
+    std::optional<std::uint64_t> find(std::uint64_t key) const;
+};
+```
+
+`OrderedFairTable(capacity, stripes)`: walk forward the same way, but **keep holding the old lock while taking the new one only when the next slot's stripe number is larger than the current one**; as soon as the next slot's stripe number is smaller (the probe wrapped across the stripe boundary), release the old lock first and then take the new one. This makes the lock acquisition order globally monotonic, so no cycle can form.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Packing `pthread_mutex_t` tightly into an array causes false sharing. Why does that hurt lock striping in particular? How big is a cache line on Apple Silicon?
+2. What is the minimum number of threads for the Stage 3 deadlock? Why might it not happen with the homework's 16 locks and 10 threads? Stage 2's approach has no deadlock at all; what does it cost?
+3. What happens in Stage 2 when two threads insert the same key at the same time? How would you handle it? (Hint: once you give up hand-over-hand, a key that someone else inserts during your probe may land after a position you have already checked.)

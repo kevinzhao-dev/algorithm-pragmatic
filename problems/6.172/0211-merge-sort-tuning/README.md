@@ -1,62 +1,129 @@
 ---
-title: Merge Sort 逐步調校
-unit: 02 · Profiling（HW2）
-source: 6.172 HW2 §3 Homework: Sorting（Write-up 1–7）
+title: Tuning Merge Sort Step by Step
+unit: 02 · Profiling (HW2)
+source: 6.172 HW2 §3 Homework — Sorting (Write-up 1–7)
 pdf: materials/6.172/homework/hw02/handout.pdf
 read: materials/6.172/homework/hw02/handout.pdf, materials/6.172/lectures/lec02.pdf
 kind: perf
 minutes: 240
 ---
 
-# 0211 · Merge Sort 逐步調校
+# 0211 · Tuning Merge Sort Step by Step
 
-> **實務上為什麼會遇到**：效能工程九成時間都在做這件事：一次只改一個變因，每改一步都量一次，把假設換成數字。這題拿一個平凡的 stable merge sort，一路套用 inlining、pointer、coarsening、記憶體重用，看每一招到底值多少。
+**Original problem:** [HW2: Profiling](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/796439e646c02f44348d50b1836ff7f9_MIT6_172F18hw2.pdf) · **Read first:** [HW2: Profiling](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/796439e646c02f44348d50b1836ff7f9_MIT6_172F18hw2.pdf), [Bentley Rules for Optimizing Work](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/1a57adbec9520270d4485b42a2e1a316_MIT6_172F18_lec2.pdf)
 
-每個 stage 新增一個獨立的函式，前一版**留在檔案裡**（不要改寫它），這正是 HW2 的流程，也是 baseline 比較的來源。所有函式都是 **stable** merge sort，簽名如下（`Compare` 預設 `std::less<>`）：
+> **Why this comes up in practice:** this is what performance engineering is 90% of the time: change one variable at a time, measure after every step, and replace assumptions with numbers. This exercise takes an ordinary stable merge sort and applies inlining, pointers, coarsening, and memory reuse one after another, to see what each trick is really worth.
+
+## Original problem
+
+6.172 HW2 §3 hands you a simple serial merge sort in C, `sort_a.c` (run as `./sort <num_elements> <num_trials>`), and improves it one step at a time while profiling each version with perf and Cachegrind. Each step copies the latest version into a new file with a new suffix, so that every version stays in the test suite for comparison. All versions keep `sort_a`'s signature, keep the internal functions `static`, and keep the overall shape of the merge sort.
+
+- §3.1 Inlining, `sort_i`: mark one or more functions `inline`, confirm in the annotated assembly whether the compiler really inlined them, and also try inlining the recursive sort function.
+- §3.2 Pointers vs. arrays, `sort_p`: on top of the inlining, access the arrays through pointers instead of indexing.
+- §3.3 Coarsening, `sort_c`: starting from the fastest correct version so far, stop the recursion at small subarrays and sort those with a simple algorithm, such as the insertion sort provided in `isort.c`.
+- §3.4 Reducing memory usage, `sort_m`: `merge` fills two scratch arrays, `left` and `right`; keep only one and let the input array serve as the other, which halves the scratch memory.
+- §3.5 Reusing temporary memory, `sort_f`: allocate the scratch space once before the sort starts and free it at the end, rather than in every call to `merge`.
+
+The write-ups:
+
+- **Write-up 1:** compare Cachegrind's output for the `DEBUG=1` build and the optimized build, and explain the pros and cons of comparing versions by instruction count instead of time. All later measurements use the optimized build.
+- **Write-up 2:** which functions you inlined, and how the inlined and non-inlined versions compare.
+- **Write-up 3:** the possible performance costs of inlining a recursive function, and how Cachegrind's data could expose them.
+- **Write-up 4:** one reason pointers can be faster, and the difference you measured.
+- **Write-up 5:** the algorithm you chose for the base case, how you picked its size, and the difference you measured.
+- **Write-up 6:** the performance change in `sort_m`, and whether a compiler could make this optimization for you automatically (explain).
+- **Write-up 7:** the performance change in `sort_f`, explained with profiling data.
+
+## Your task
+
+Each stage adds a separate function, and the previous version **stays in the file** (don't rewrite it). That's exactly HW2's workflow, and it's where the baselines for comparison come from. Every function is a **stable** merge sort with this signature (`Compare` defaults to `std::less<>`):
 
 ```cpp
 template <typename T, typename Compare = std::less<>>
 void sort_x(std::span<T> data, Compare cmp = {});
 ```
 
-不可使用 `std::sort`、`std::stable_sort`、`std::inplace_merge`。
+You must not use `std::sort`, `std::stable_sort`, or `std::inplace_merge`.
+
+The steps follow the original, but the code is generic C++ and the perf tests compare each stage against fixed baselines inside one executable, instead of you profiling and reporting times.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Baseline
 
-`sort_a`：把 HW2 的 `sort_a.c` 翻成 C++。遞迴到單一元素，merge 時用兩個暫存陣列。空陣列、單一元素都要正確。比較次數不可超過 `n⌈lg n⌉`。
+```cpp
+template <typename T, typename Compare = std::less<>>
+void sort_a(std::span<T> data, Compare cmp = {});
+```
 
-## Stage 2 — Inlining（§3.1）
+`sort_a`: translate HW2's `sort_a.c` into C++. Recurse down to single elements, and merge using two scratch arrays. Empty arrays and single elements must work. The number of comparisons must not exceed `n⌈lg n⌉`.
 
-`sort_i`：比較子用 template 參數傳入，讓編譯器能內聯。**`inline` 關鍵字在 `-O2` 幾乎沒差**：hot loop 本來就會被內聯，真正擋路的是「編譯器看不到被呼叫的函式」。
+## Stage 2 — Inlining (§3.1)
 
-測試的 baseline（`support/sort_baselines.hpp` 的 `erased_sort`）是 `qsort` 式介面：每次比較都是間接呼叫、每次搬元素都是 `memcpy(size)`。你的 `sort_i` 要在同一個執行檔裡比它快至少 **1.1 倍**（用 16-byte record 比較；兩邊都在每次 merge 配置暫存，這個成本後面的 stage 才處理，實際差距通常在 1.3 倍上下。量一下自己的數字）。
+```cpp
+template <typename T, typename Compare = std::less<>>
+void sort_i(std::span<T> data, Compare cmp = {});
+```
 
-## Stage 3 — Pointer 迭代與 aliasing（§3.2）
+`sort_i`: pass the comparator as a template parameter so that the compiler can inline it. **The `inline` keyword makes almost no difference at `-O2`**: the hot loop gets inlined anyway, and what really stands in the way is "the compiler can't see the function being called."
 
-- `sort_p`：`merge` 改用指標走訪，行為與 `sort_i` 相同，正確即可。量一下：指標版和索引版差不多。編譯器不笨，兩種寫法多半產生同樣的機器碼。**指標真正值錢的地方是下一項。**
-- `add_to_all(ByteView& view, uint8_t delta)`：把 `view` 的每個 byte 加上 `delta`（wrap）。`ByteView` 是 `{uint8_t* data; size_t size}`。
-  baseline 寫成 `for (i < view.size) view.data[i] += delta`：透過 `uint8_t*` 寫入可能 alias 到 `view` 自己的欄位，編譯器不得不每一圈重新載入、也不能向量化。把 `data`、`size` 先拷到區域變數（hoisting）就解開了。至少要比 baseline 快 **4 倍**。
+The test's baseline (`erased_sort` in `support/sort_baselines.hpp`) has a `qsort`-style interface: every comparison is an indirect call, and every element move is a `memcpy(size)`. Your `sort_i` must beat it by at least **1.1×** in the same executable (compared on 16-byte records; both sides allocate scratch space on every merge, a cost that later stages deal with, so the actual gap is usually around 1.3×. Measure your own numbers).
 
-（想一想 `std::vector<uint8_t>` 的 `for (i < v.size()) v[i] = ...` 為什麼也中招，而 `std::vector<uint32_t>` 不會。）
+## Stage 3 — Pointer iteration and aliasing (§3.2)
 
-## Stage 4 — Coarsening（§3.3）
+```cpp
+template <typename T, typename Compare = std::less<>>
+void sort_p(std::span<T> data, Compare cmp = {});
 
-`sort_c(data, cmp, cutoff = 16)`：子陣列長度 `<= cutoff` 就改用 insertion sort（要 stable）。`cutoff <= 1` 等同遞迴到底。要比固定的 `fine_grained_sort` baseline 快至少 **1.25 倍**。
+struct ByteView {
+    std::uint8_t* data;
+    std::size_t size;
+};
 
-## Stage 5 — 只用一份暫存（§3.4）
+[[gnu::noinline]] inline void add_to_all(ByteView& view, std::uint8_t delta);
+```
 
-`sort_m(data, cmp, cutoff = 16)`：`merge` 只把左半段拷到暫存，用原陣列當另一半的來源。測試用替換全域 `operator new` 的方式量尖峰暫存量，不可超過 `(n/2 + 1)` 個元素（可少許超出，例如 16 byte 級的額度）。
+- `sort_p`: rewrite `merge` to walk the arrays with pointers. It behaves the same as `sort_i`, and it only has to be correct. Measure it: the pointer version and the index version come out about the same. The compiler isn't dumb, and the two styles usually produce the same machine code. **Where pointers really pay off is the next item.**
+- `add_to_all(ByteView& view, uint8_t delta)`: add `delta` to every byte of `view` (wrapping around). `ByteView` is `{uint8_t* data; size_t size}`, and an empty view (`{nullptr, 0}`) must work too.
+  The baseline is written as `for (i < view.size) view.data[i] += delta`: a write through `uint8_t*` may alias `view`'s own fields, so the compiler has to reload them on every iteration and can't vectorize the loop. Copying `data` and `size` into local variables first (hoisting) removes the problem. It must be at least **4×** faster than the baseline.
 
-寫完想一下：這個寫回的順序為什麼安全？編譯器能幫你做這個最佳化嗎？
+(Think about why `for (i < v.size()) v[i] = ...` over a `std::vector<uint8_t>` falls into the same trap, while a `std::vector<uint32_t>` doesn't.)
 
-## Stage 6 — 重用暫存（§3.5）
+## Stage 4 — Coarsening (§3.3)
 
-`sort_f(data, cmp, cutoff = 16)`：整個排序只配置**一次**暫存，所有遞迴共用（`operator new` 計數必須是 1），尖峰暫存量同 Stage 5。要比固定 baseline 快至少 **1.4 倍**。
+```cpp
+template <typename T, typename Compare = std::less<>>
+void sort_c(std::span<T> data, Compare cmp = {}, std::size_t cutoff = 16);
+```
 
-自己用 `sample` 看一次 Release 版，把每個 stage 的時間列成表。
+`sort_c(data, cmp, cutoff = 16)`: switch to insertion sort (which must be stable) once a subarray's length is `<= cutoff`. `cutoff <= 1` is the same as recursing all the way down. It must beat the fixed `fine_grained_sort` baseline by at least **1.25×**.
 
-## 面試追問
+## Stage 5 — A single scratch buffer (§3.4)
 
-1. 如果 `sort_i` 改成遞迴函式也標 `inline`，編譯器會發生什麼事？內聯遞迴函式的代價是什麼？cachegrind／指令數量得到的訊號和實際時間會矛盾嗎？
-2. 用指令數當時間的代理：比較 `sort_a` 的 `-O0` 和 `-O2`，指令數變了多少倍，時間呢？兩者不一致的地方代表什麼？
-3. Stage 5 寫回原陣列時，為什麼不會蓋掉尚未讀取的右半部？
+```cpp
+template <typename T, typename Compare = std::less<>>
+void sort_m(std::span<T> data, Compare cmp = {}, std::size_t cutoff = 16);
+```
+
+`sort_m(data, cmp, cutoff = 16)`: `merge` copies only the left half into scratch space and uses the original array as the source of the other half. The test measures the peak scratch usage by replacing the global `operator new`, and it must not exceed `(n/2 + 1)` elements (a small overshoot is allowed, on the order of 16 bytes).
+
+Once it works, think about it: why is this write-back order safe? Could the compiler make this optimization for you?
+
+## Stage 6 — Reusing the scratch buffer (§3.5)
+
+```cpp
+template <typename T, typename Compare = std::less<>>
+void sort_f(std::span<T> data, Compare cmp = {}, std::size_t cutoff = 16);
+```
+
+`sort_f(data, cmp, cutoff = 16)`: allocate scratch space only **once** for the whole sort, and share it across all the recursive calls (the `operator new` count must be 1; an input so small that it never merges may allocate nothing). The peak scratch usage limit is the same as in Stage 5. It must beat the fixed baseline by at least **1.4×**.
+
+Look at a Release build with `sample` yourself once, and put the time of each stage in a table.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. If you also mark the recursive function in `sort_i` as `inline`, what does the compiler do? What does inlining a recursive function cost? Can the signal from cachegrind and instruction counts contradict the actual running time?
+2. Use the instruction count as a proxy for time: comparing `sort_a` at `-O0` and at `-O2`, by what factor does the instruction count change, and by what factor does the time? What does it mean where the two disagree?
+3. When Stage 5 writes back into the original array, why doesn't it overwrite the part of the right half that hasn't been read yet?

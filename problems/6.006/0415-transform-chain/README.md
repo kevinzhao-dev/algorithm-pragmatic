@@ -1,6 +1,6 @@
 ---
-title: 矩陣連乘的即時更新（augmented sequence）
-unit: 04 · Trees & Heaps（PS4）
+title: Live Updates to a Chained Matrix Product (augmented sequence)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 PS4 Problem 4-5
 pdf: materials/6.006/psets/ps4/questions.pdf
 answer: materials/6.006/psets/ps4/solutions.pdf
@@ -9,40 +9,82 @@ kind: code
 minutes: 55
 ---
 
-# 0415 · 矩陣連乘的即時更新
+# 0415 · Live Updates to a Chained Matrix Product
 
-> **實務上為什麼會遇到**：機械手臂和 scene graph 的正向運動學、GPU 的轉換鏈、WebGL 的 matrix stack，都是「一長串不可交換的轉換相乘，只改其中一個，要立刻拿到整串乘積」。把 O(n) 重算砍到 O(log n)，靠的就是 subtree augmentation。
+**Original problem:** [Problem Set 4 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/bff0aaeeb571a77083f10fd8e31f71d4_MIT6_006S20_ps4-questions.pdf) · **Read first:** [Lecture 7: Binary Trees, Part 2: AVL notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf), [Recitation 7 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/16d43dec3488717057d7daff2bac3400_MIT6_006S20_r07.pdf)
 
-一條機械手臂由一串 joint 組成，每個 joint 是一個矩陣 `M`，整條手臂的轉換是有順序的乘積 `M_0 · M_1 · … · M_{n-1}`。矩陣型別 `M` 提供 `M::identity()` 和 `operator*`，**結合但不可交換**；`operator*` 當作 O(1)。
+> **Why this comes up in practice:** forward kinematics for robotic arms and scene graphs, transformation chains on a GPU, and WebGL's matrix stack all multiply a long chain of non-commutative transformations, change just one of them, and need the product of the whole chain right away. Subtree augmentation is what cuts the O(n) recomputation down to O(log n).
 
-`TransformChain<M>` 的介面與複雜度（`n` 是目前 joint 數）：
+## Original problem
 
-## Stage 1 — 更新與全段乘積
+6.006 PS4 Problem 4-5 models a robotic arm built from n + 1 rigid links joined in a chain by n rotating joints. Each link's orientation is given relative to the link before it: the change at joint k, between links k and k + 1, is a 4 × 4 transformation matrix M_k, so the whole arm is described by M = (M_0, …, M_{n−1}). The arm's full transformation is the ordered product M_0 · M_1 · … · M_{n−1}. Multiplying two 4 × 4 matrices takes O(1) time, but matrix multiplication is not commutative. Design a database whose operations meet these worst-case bounds:
 
-- `explicit TransformChain(std::vector<M> joints)`：O(n)，`operator*` 呼叫不超過 `3n`。
-- `size()`。
-- `update_joint(k, M)`：把第 `k` 個 joint 換掉，O(log n) 次 `operator*`；`k` 超出範圍丟 `std::out_of_range`。
-- `full_transformation()`：回傳目前的整條乘積，**O(1)，不能呼叫 `operator*`**。沒有 joint 時回傳 `M::identity()`。
+- `initialize(M)`: build the database from the initial matrices in O(n) time.
+- `update_joint(k, M)`: replace M_k with the matrix M in O(log n) time.
+- `full_transformation()`: return the arm's current full transformation in O(1) time.
 
-可以 `#include "../0404-avl-sequence/solution.hpp"`，把 matrix 當作 sequence item，定義一個 `Aug`（`combine` 就是相乘）；你在 0404 已經把麻煩的部分都做完了。
+## Your task
 
-（這一關 joint 的數量和順序都不變，所以靜態結構就夠用；Stage 3 才需要動態版本。）
+A robotic arm consists of a chain of joints, each of which is a matrix `M`, and the transformation of the whole arm is the ordered product `M_0 · M_1 · … · M_{n-1}`. The matrix type `M` provides `M::identity()` and `operator*`, which is **associative but not commutative**; treat `operator*` as O(1).
 
-## Stage 2 — 區段乘積
+The stages below give the interface and complexity of `TransformChain<M>` (`n` is the current number of joints). Stage 1 is the original problem's database, and Stages 2 and 3 go beyond it with segment products and with inserting and removing joints.
 
-`segment(l, r)`：回傳 `M_l · … · M_{r-1}`，O(log n) 次 `operator*`；`l == r` 回傳 `identity`；`l > r` 或 `r > n` 丟 `std::out_of_range`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`full_transformation` 比 `segment(0, n)` 更便宜，是因為根節點已經存好答案了。
+## Stage 1 — Updates and the full product
 
-## Stage 3 — 重新組裝手臂
+```cpp
+template <typename M>
+class TransformChain {
+public:
+    explicit TransformChain(std::vector<M> joints);
+    std::size_t size() const;
+    void update_joint(std::size_t index, M matrix);
+    const M& full_transformation() const;
+};
+```
 
-- `insert_joint(k, M)`：在位置 `k` 插入新 joint（`0 ≤ k ≤ n`），O(log n)。
-- `remove_joint(k)`：移除並回傳第 `k` 個 joint，O(log n)。
+- `explicit TransformChain(std::vector<M> joints)`: O(n), with at most `3n` calls to `operator*`.
+- `size()`.
+- `update_joint(k, M)`: replace joint `k`, using O(log n) calls to `operator*` (at most `4⌈lg n⌉ + 8` in the tests); throw `std::out_of_range` if `k` is out of range.
+- `full_transformation()`: return the current product of the whole chain in **O(1), without calling `operator*`**. When there are no joints, return `M::identity()`.
 
-兩者超出範圍時都丟 `std::out_of_range`。這一關結束後，`full_transformation` 和 `segment` 必須仍然正確、仍然只用這些乘法次數。
+You may `#include "../0404-avl-sequence/solution.hpp"`, treat each matrix as a sequence item, and define an `Aug` whose `combine` is multiplication; you already did the hard part in 0404.
 
-## 面試追問
+(In this stage the number and order of the joints never change, so a static structure is enough; only Stage 3 needs a dynamic version.)
 
-1. 乘積不可交換時，`combine(left, right)` 的呼叫順序錯了會發生什麼？你的測試怎麼抓到它？
-2. 如果 joint 永遠不會增減，完整二元樹（隱式陣列）跟 AVL 比，有什麼好處？
-3. 真實的轉換用 `double` 會累積誤差：O(log n) 次更新跟每次重算相比，數值上誰比較準？
+## Stage 2 — Segment products
+
+```cpp
+// in class TransformChain<M>
+M segment(std::size_t left, std::size_t right) const;
+```
+
+`segment(l, r)`: return `M_l · … · M_{r-1}` using O(log n) calls to `operator*` (at most `8⌈lg n⌉ + 16` in the tests). If `l == r`, return `identity`; if `l > r` or `r > n`, throw `std::out_of_range`.
+
+`full_transformation` is cheaper than `segment(0, n)` because the root already stores the answer.
+
+## Stage 3 — Reassembling the arm
+
+```cpp
+// in class TransformChain<M>
+void insert_joint(std::size_t index, M matrix);
+M remove_joint(std::size_t index);
+```
+
+- `insert_joint(k, M)`: insert a new joint at position `k` (`0 ≤ k ≤ n`), in O(log n).
+- `remove_joint(k)`: remove and return joint `k`, in O(log n).
+
+Both throw `std::out_of_range` when the position is out of range. One insert plus one remove may use at most `24⌈lg n⌉ + 48` calls to `operator*` in the tests. After this stage, `full_transformation` and `segment` must still be correct and still use only the numbers of multiplications given above.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. When the product isn't commutative, what happens if the calls to `combine(left, right)` come in the wrong order? How do your tests catch it?
+2. If joints are never added or removed, what does a complete binary tree (an implicit array) offer compared with an AVL tree?
+3. Real transformations use `double` and accumulate rounding error: numerically, which is more accurate, O(log n) updates or recomputing everything every time?
+
+---
+
+**Official solution:** [Problem Set 4 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/0462839ce975fea99f6a7b8adc8e1477_MIT6_006S20_ps4-solutions.pdf). Read it after you finish.

@@ -1,6 +1,6 @@
 ---
-title: Sequence AVL（索引與區間 fold）
-unit: 04 · Trees & Heaps（PS4）
+title: Sequence AVL (indexing and range folds)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 Lecture 7, Recitation 7
 pdf: materials/6.006/recitations/rec07.pdf
 read: materials/6.006/lectures/lec06.pdf, materials/6.006/lectures/lec07.pdf
@@ -10,50 +10,104 @@ minutes: 80
 
 # 0404 · Sequence AVL
 
-> **實務上為什麼會遇到**：文字編輯器的 rope、需要「在中間插入又能隨機存取」的序列，都用這種結構。陣列的 `insert_at` 是 O(n)，linked list 的 `get_at` 是 O(n)；這棵樹兩個都是 O(log n)。
+**Based on:** [Recitation 7 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/16d43dec3488717057d7daff2bac3400_MIT6_006S20_r07.pdf) · **Read first:** [Lecture 6: Binary Trees, Part 1 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/376714cc85c6c784d90eec9c575ec027_MIT6_006S20_lec6.pdf), [Lecture 7: Binary Trees, Part 2: AVL notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf)
 
-用 0402 的 `AvlTree` 實作 **Sequence**：這次 traversal order 就是序列順序，跟 key 無關。請 `#include "../0402-avl-tree/solution.hpp"`，重用你的引擎，不要重寫平衡邏輯。
+> **Why this comes up in practice:** a text editor's rope, and any sequence that needs both insertion in the middle and random access, use this structure. An array's `insert_at` is O(n) and a linked list's `get_at` is O(n); this tree does both in O(log n).
+
+## Your task
+
+Use the `AvlTree` from 0402 to implement a **Sequence**: this time the traversal order is the order of the sequence and has nothing to do with keys. `#include "../0402-avl-tree/solution.hpp"` and reuse your engine; don't rewrite the balancing logic.
 
 ```cpp
 template <typename T, typename Aug = NoAugment>
 class AvlSequence;
 ```
 
-## Stage 1 — 建構與索引
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `explicit AvlSequence(std::vector<T> items)`：O(n) 建樹（用 0402 的 `build`）。
-- `node_at(i)`：第 `i` 個節點（0 起算），O(log n)，`i >= size()` 時丟 `std::out_of_range`；這是其他操作的核心。
-- `at(i)` / `set_at(i, v)`：O(log n)；`set_at` 要維持 augmentation。
-- `size()` / `empty()` / `to_vector()` / `tree()`。
+## Stage 1 — Construction and indexing
 
-## Stage 2 — 中間插入與刪除
+```cpp
+template <typename T, typename Aug = NoAugment>
+class AvlSequence {
+public:
+    using Tree = AvlTree<T, Aug>;
+    using Node = typename Tree::Node;
+    using Value = typename Aug::Value;
 
-- `insert_at(i, v)`：`0 ≤ i ≤ size()`，把 `v` 放到第 `i` 個位置（原本 `i` 之後的元素往後移），`i > size()` 時丟 `std::out_of_range`。
-- `delete_at(i)`：移除並回傳第 `i` 個，`i >= size()` 時丟 `std::out_of_range`。
+    AvlSequence() = default;
+    explicit AvlSequence(std::vector<T> items);
 
-都是 O(log n)。
+    std::size_t size() const;
+    bool empty() const;
+    const Tree& tree() const;
+    Node* node_at(std::size_t index) const;
+    const T& at(std::size_t index) const;
+    void set_at(std::size_t index, T value);
+    std::vector<T> to_vector() const;
+};
+```
 
-## Stage 3 — 區間 fold
+- `explicit AvlSequence(std::vector<T> items)`: build the tree in O(n) (with 0402's `build`).
+- `node_at(i)`: the `i`-th node (counting from 0), in O(log n); throw `std::out_of_range` if `i >= size()`. This is the core of the other operations.
+- `at(i)` / `set_at(i, v)`: O(log n); `set_at` must maintain the augmentation. Both throw `std::out_of_range` if `i >= size()`.
+- `size()` / `empty()` / `to_vector()` / `tree()`.
 
-`fold(l, r)`：對區間 `[l, r)` 的 `Aug` 摘要做 fold，依序列順序 `combine`，O(log n)。`l == r` 回傳 `identity()`；`l > r` 或 `r > size()` 時丟 `std::out_of_range`。
+## Stage 2 — Inserting and deleting in the middle
 
-**`combine` 不保證交換**，左右順序是這一關的陷阱。節點已經存了整棵子樹的摘要，不需要走訪區間內每個元素：完全包住的子樹直接用 `node->aug`，每一層最多再往下走兩個分支。呼叫 `combine` 的次數要是 O(log n)。
+```cpp
+// in class AvlSequence<T, Aug>
+void insert_at(std::size_t index, T value);
+T delete_at(std::size_t index);
+```
 
-Recitation 7 的 `flip(i)`／`count_ones_upto(i)` 就是這個機制（`Aug` 是 bit 的總和）。
+- `insert_at(i, v)`: with `0 ≤ i ≤ size()`, put `v` at position `i` (the elements from the old position `i` onward move back by one); throw `std::out_of_range` if `i > size()`.
+- `delete_at(i)`: remove and return the `i`-th element; throw `std::out_of_range` if `i >= size()`.
 
-## Stage 4 — 實務延伸：文字緩衝區
+Both are O(log n).
 
-`TextBuffer`（可以用 `AvlSequence<char, YourHashAug>` 實作）：
+## Stage 3 — Range fold
 
-- `TextBuffer(text)`：O(n) 建立。`size()`、`at(i)`。
-- `insert(i, ch)`、`erase(i)`：O(log n)。
-- `substr(l, r)`：`[l, r)` 的內容，O(r − l + log n)，範圍非法丟 `std::out_of_range`。
-- `equal_ranges(a, b, length)`：`[a, a+length)` 與 `[b, b+length)` 內容是否相同，**O(log n)**，範圍非法丟 `std::out_of_range`。
+```cpp
+// in class AvlSequence<T, Aug>
+Value fold(std::size_t left, std::size_t right) const;
+```
 
-提示：多項式 hash 也是一個 monoid。值存 `(hash, base^len)`，`combine` 就是 `(h_a · p_b + h_b, p_a · p_b)`，全部 mod 一個大質數（例如 `2^61 - 1`）。`equal_ranges` 比較兩段的摘要，回答可能出錯的機率夠小就好。
+`fold(l, r)`: fold the `Aug` summaries over the range `[l, r)`, applying `combine` in sequence order, in O(log n). If `l == r`, return `identity()`; if `l > r` or `r > size()`, throw `std::out_of_range`.
 
-## 面試追問
+**`combine` is not guaranteed to be commutative**, and the left-right order is the trap in this stage. Each node already stores the summary of its whole subtree, so you don't need to visit every element in the range: for a subtree that lies entirely inside the range, use `node->aug` directly, and at each level descend into at most two more branches. The number of calls to `combine` must be O(log n) (the tests allow `8 lg n + 16` per query).
 
-1. 為什麼 `fold` 只需要走 O(log n) 個節點？完全被 `[l, r)` 蓋住的節點有什麼特別？
-2. 如果區間操作還要支援「整段加上一個數」，要改哪裡？（這就是 lazy propagation）
-3. `equal_ranges` 回傳 `true` 時，實際一定相等嗎？怎麼降低誤報？誤報的代價是什麼？
+Recitation 7's `flip(i)`/`count_ones_upto(i)` is exactly this mechanism (with `Aug` being the sum of the bits).
+
+## Stage 4 — Real-world extension: text buffer
+
+```cpp
+class TextBuffer {
+public:
+    explicit TextBuffer(std::string_view text = "");
+
+    std::size_t size() const;
+    char at(std::size_t index) const;
+    void insert(std::size_t index, char ch);
+    void erase(std::size_t index);
+    std::string substr(std::size_t left, std::size_t right) const;
+    bool equal_ranges(std::size_t a, std::size_t b, std::size_t length) const;
+};
+```
+
+`TextBuffer` (you can implement it with `AvlSequence<char, YourHashAug>`):
+
+- `TextBuffer(text)`: built in O(n). `size()` and `at(i)`.
+- `insert(i, ch)` and `erase(i)`: O(log n).
+- `substr(l, r)`: the contents of `[l, r)`, in O(r − l + log n); throw `std::out_of_range` for an invalid range.
+- `equal_ranges(a, b, length)`: whether `[a, a+length)` and `[b, b+length)` have the same contents, in **O(log n)**; throw `std::out_of_range` for an invalid range.
+
+Hint: a polynomial hash is a monoid too. Store `(hash, base^len)` as the value, and `combine` is `(h_a · p_b + h_b, p_a · p_b)`, all modulo a large prime (for example `2^61 - 1`). `equal_ranges` compares the summaries of the two ranges; it's fine as long as the probability of a wrong answer is small enough.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does `fold` only need to visit O(log n) nodes? What is special about the nodes that `[l, r)` covers completely?
+2. If range operations also had to support adding a number to a whole range, what would you change? (This is lazy propagation.)
+3. When `equal_ranges` returns `true`, are the two ranges always actually equal? How do you reduce false positives? What does a false positive cost?

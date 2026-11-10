@@ -1,6 +1,6 @@
 ---
-title: Sorted Array Set（Binary Search 與順序查詢）
-unit: 02 · Sorting & Recurrences（PS2）
+title: Sorted Array Set (binary search and order queries)
+unit: 02 · Sorting & Recurrences (PS2)
 source: 6.006 Lecture 3, Recitation 3
 pdf: materials/6.006/recitations/rec03.pdf
 read: materials/6.006/lectures/lec03.pdf
@@ -10,54 +10,105 @@ minutes: 75
 
 # 0201 · Sorted Array Set
 
-> **實務上為什麼會遇到**：read-only 的索引（SSTable 的 index block、靜態設定檔的查找表）常常就是一個排好序的陣列加 binary search：比樹省記憶體、cache 也好。binary search 寫錯邊界也是面試最常見的翻車現場。
+**Based on:** [Recitation 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1869dbf640ded6b31f1bd369d2001ef5_MIT6_006S20_r03.pdf) · **Read first:** [Lecture 3: Sorting notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6d1ae5278d02bbecb5c4428928b24194_MIT6_006S20_lec3.pdf)
 
-Lecture 3 的 Set interface：項目有唯一的 key，可以用 key 查找、也能問「比 k 大的下一個」。用一個依 key 排序的陣列實作，查找全部 O(log n)。**不可用 `std::map`、`std::set`、`std::lower_bound`**，binary search 要自己寫。排序本身這題先用標準函式庫（`std::stable_sort`），0202、0203 才親手寫。
+> **Why this comes up in practice:** a read-only index (an SSTable's index block, the lookup table of a static config file) is often just a sorted array plus binary search: it uses less memory than a tree and is friendlier to the cache. Getting binary search's boundaries wrong is also the most common way to crash and burn in an interview.
 
-`Key` 只保證有 `<` 和 `==`。測試用 `Counted` 計算比較次數，確認真的是 binary search。
+## Your task
 
-一次只看一關，做完再往下讀。
+The Set interface from Lecture 3: items have unique keys, and you can look an item up by key and also ask for "the next one after k." Implement it with an array sorted by key, so that every lookup is O(log n). **Do not use `std::map`, `std::set`, or `std::lower_bound`**: write the binary search yourself. For the sorting itself, this exercise uses the standard library (`std::stable_sort`); you write sorts by hand in 0202 and 0203.
+
+`Key` is only guaranteed to have `<` and `==`. The tests count comparisons with `Counted` to confirm that you really are doing binary search.
+
+You write the two binary searches first, then the set's static and dynamic operations, and finish with the range and as-of queries that a time-series index needs.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
 
 ## Stage 1 — Binary Search
 
-`sorted` 是 `std::span<const T>`，已遞增排序、**可能有重複**：
+```cpp
+template <typename T>
+std::size_t lower_bound_index(std::span<const T> sorted, const T& key);
 
-- `lower_bound_index<T>(sorted, key)`：第一個 `sorted[i] >= key` 的 `i`（都小於 key 時回傳 `size()`）。
-- `upper_bound_index<T>(sorted, key)`：第一個 `sorted[i] > key` 的 `i`（都不大於 key 時回傳 `size()`）。
+template <typename T>
+std::size_t upper_bound_index(std::span<const T> sorted, const T& key);
+```
 
-比較次數 ≤ 2·⌈log₂(n+1)⌉ + 2。邊界：空陣列、key 比全部都小／都大、一整串都等於 key。
+`sorted` is a `std::span<const T>`, already sorted in increasing order, and it **may contain duplicates**:
 
-## Stage 2 — 靜態操作
+- `lower_bound_index<T>(sorted, key)`: the first `i` with `sorted[i] >= key` (return `size()` when every element is less than key).
+- `upper_bound_index<T>(sorted, key)`: the first `i` with `sorted[i] > key` (return `size()` when no element is greater than key).
 
-`SortedArraySet<Key, Value>`，`Item` 是 `std::pair<Key, Value>`：
+Use at most 2·⌈log₂(n+1)⌉ + 2 comparisons. Edge cases: an empty array, a key smaller / larger than everything, and a whole run of elements equal to key.
 
-| 操作 | 行為 | 比較次數 |
+## Stage 2 — Static operations
+
+```cpp
+template <typename Key, typename Value>
+class SortedArraySet {
+public:
+    using Item = std::pair<Key, Value>;
+
+    SortedArraySet();
+    explicit SortedArraySet(std::vector<Item> items);
+
+    std::size_t size() const;
+
+    const Item* find(const Key& key) const;
+    const Item* find_min() const;
+    const Item* find_max() const;
+    const Item* find_next(const Key& key) const;
+    const Item* find_prev(const Key& key) const;
+
+    std::span<const Item> items() const;
+};
+```
+
+`SortedArraySet<Key, Value>`, where `Item` is `std::pair<Key, Value>`:
+
+| Operation | Behavior | Comparisons |
 | --- | --- | --- |
-| `SortedArraySet()` / `explicit SortedArraySet(vector<Item>)` | 空的 / 建立，同 key 時**後出現的取代先出現的** | O(n log n) |
+| `SortedArraySet()` / `explicit SortedArraySet(vector<Item>)` | Empty / build; for equal keys, **the later occurrence replaces the earlier one** | O(n log n) |
 | `size()` | | |
-| `find(k)` | 回傳指向項目的 `const Item*`，不存在時 `nullptr` | O(log n) |
-| `find_min()` / `find_max()` | 最小／最大 key 的項目，空的時 `nullptr` | O(1) |
-| `find_next(k)` | **嚴格大於** `k` 的最小 key 的項目 | O(log n) |
-| `find_prev(k)` | **嚴格小於** `k` 的最大 key 的項目 | O(log n) |
-| `items()` | `std::span<const Item>`，依 key 遞增 | O(1) |
+| `find(k)` | Return a `const Item*` pointing at the item, or `nullptr` if it doesn't exist | O(log n) |
+| `find_min()` / `find_max()` | The item with the smallest / largest key, or `nullptr` when the set is empty | O(1) |
+| `find_next(k)` | The item with the smallest key **strictly greater than** `k` | O(log n) |
+| `find_prev(k)` | The item with the largest key **strictly less than** `k` | O(log n) |
+| `items()` | A `std::span<const Item>`, in increasing key order | O(1) |
 
-注意 `k` 不一定存在於集合中。回傳的指標在下一次修改前有效。
+Note that `k` need not be in the set. A returned pointer stays valid until the next modification.
 
-## Stage 3 — 動態操作
+## Stage 3 — Dynamic operations
 
-- `insert(item)`：key 已存在時**取代** value，回傳 `false`；否則新增，回傳 `true`。比較次數 O(log n)（找位置），元素搬動 O(n) 無妨。
-- `erase(k)`：移除並回傳該項目（`std::optional<Item>`），不存在回傳 `std::nullopt`。比較次數 O(log n)。
+```cpp
+// in class SortedArraySet<Key, Value>
+bool insert(Item item);
+std::optional<Item> erase(const Key& key);
+```
 
-## Stage 4 — 實務延伸：時間序列索引
+- `insert(item)`: if the key already exists, **replace** its value and return `false`; otherwise add the item and return `true`. O(log n) comparisons (to find the position); O(n) element moves are fine.
+- `erase(k)`: remove and return that item (`std::optional<Item>`), or return `std::nullopt` if it doesn't exist. O(log n) comparisons.
 
-時間序列資料庫（或 LSM tree 的快照讀）常用 sorted array 索引：
+## Stage 4 — Real-world extension: a time-series index
 
-- `range(lo, hi)`：回傳 `std::span<const Item>`，涵蓋所有 `lo ≤ key < hi` 的項目。回傳的是**內部陣列的一段 view**（zero-copy），比較次數 O(log n)。
-- `as_of(t)`：`key ≤ t` 的項目中 key 最大的，沒有時回傳 `nullptr`（「時間 t 當下看到的最新版本」）。
-- `lo > hi` 時 `range` 回傳空的 span。
+```cpp
+// in class SortedArraySet<Key, Value>
+std::span<const Item> range(const Key& lo, const Key& hi) const;
+const Item* as_of(const Key& t) const;
+```
 
-## 面試追問
+Time-series databases (and snapshot reads in an LSM tree) often use a sorted-array index:
 
-1. `lower_bound` 為什麼寫成 `low < high` 配上半開區間 `[low, high)` 最不容易出錯？`mid` 的算法為什麼要寫 `low + (high - low) / 2`？
-2. 這個 Set 的 `insert` 是 O(n) 而 `find` 是 O(log n)：什麼樣的讀寫比例適合它？跟 hash table、平衡樹比，何時會選它？
-3. 回傳指標或 span 之後呼叫 `insert`，為什麼這些指標可能失效？`std::vector` 的迭代器失效規則是什麼？
+- `range(lo, hi)`: return a `std::span<const Item>` covering every item with `lo ≤ key < hi`. What you return is **a view of a slice of the internal array** (zero-copy), using O(log n) comparisons.
+- `as_of(t)`: among the items with `key ≤ t`, the one with the largest key, or `nullptr` if there is none ("the latest version visible at time t").
+- When `lo > hi`, `range` returns an empty span.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is `lower_bound` least error-prone when written with `low < high` and the half-open interval `[low, high)`? Why should `mid` be computed as `low + (high - low) / 2`?
+2. This Set's `insert` is O(n) while `find` is O(log n): what read/write ratio suits it? Compared with a hash table or a balanced tree, when would you choose it?
+3. If you call `insert` after returning a pointer or a span, why might those pointers become invalid? What are `std::vector`'s iterator invalidation rules?

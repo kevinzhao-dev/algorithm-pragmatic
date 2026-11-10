@@ -1,6 +1,6 @@
 ---
-title: Baseball Elimination（聯賽誰還有希望）
-unit: 07 · Network Flow（PS7）
+title: Baseball Elimination (which teams can still win the league)
+unit: 07 · Network Flow (PS7)
 source: 6.046J Lecture 14 (Baseball Elimination)
 pdf: materials/6.046j/lectures/lec14b.pdf
 read: materials/6.046j/lectures/lec14b.pdf
@@ -10,48 +10,75 @@ minutes: 80
 
 # 0703 · Baseball Elimination
 
-> **實務上為什麼會遇到**：排行榜類產品的「魔術數字」、賽季排程（剩餘賽程能否讓某隊奪冠）、任何「給定未完成的比賽，某個結果是否還可能發生」的問題，都能化成 flow 判定。
+**Based on:** [Baseball Elimination Notes](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bd6083516a6e9fd003be011d866c472f_MIT6_046JS15_lec14B.pdf) · **Read first:** [Baseball Elimination Notes](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bd6083516a6e9fd003be011d866c472f_MIT6_046JS15_lec14B.pdf)
 
-`Standings` 描述目前戰績：`wins[i]` 是 i 隊已贏場數，`games_left[i][j]` 是 i、j 之間剩餘比賽數（對稱、對角線 0）。只有贏或輸，沒有平手。
+> **Why this comes up in practice:** the "magic number" in leaderboard products, season scheduling (can the remaining games still let a team finish first?), and any question of the form "given the unfinished games, can this outcome still happen?" can all be decided with flow.
 
-某隊被 **eliminated**：不管剩下的比賽結果如何，都不可能讓它贏最多場（第一名並列也算有希望，不算 eliminated）。
+## Your task
 
-一次只看一關。
+`Standings` describes the current standings: `wins[i]` is the number of games team i has won, and `games_left[i][j]` is the number of games left between i and j (symmetric, with 0 on the diagonal). Every game ends in a win or a loss; there are no ties.
 
-## Stage 1 — 明顯出局
+A team is **eliminated** when no outcome of the remaining games lets it finish with the most wins (a tie for first still counts as having a chance, so it is not eliminated).
 
-`bool trivially_eliminated(const Standings& s, int team)`：只比較「`team` 的 wins + 自己剩下比賽全贏」和「其他隊已贏場數」。
+You go from a quick check to the exact flow-based test from Lecture 14, then to a certificate a person can check, and finally to a tracker that updates as games are played.
 
-## Stage 2 — Flow 判定
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`bool is_eliminated(const Standings& s, int team)`：建立 flow network 精確判定。若某隊 `wins[i]` 已經超過 `team` 能達到的上限，直接判定 eliminated（capacity 不能是負的）。
+Read one stage at a time.
 
-## Stage 3 — 淘汰憑證
+## Stage 1 — Obviously eliminated
 
-`std::vector<int> elimination_certificate(const Standings& s, int team)`：未被 eliminated 回傳空 vector；否則回傳隊伍子集 `R`（不含 `team`，升冪），滿足
+```cpp
+struct Standings {
+    std::vector<int> wins;
+    std::vector<std::vector<int>> games_left;
+};
+
+bool trivially_eliminated(const Standings& s, int team);
+```
+
+`bool trivially_eliminated(const Standings& s, int team)`: compare only "`team`'s wins plus all of its remaining games won" against "the number of games each other team has already won".
+
+## Stage 2 — Deciding with flow
+
+```cpp
+bool is_eliminated(const Standings& s, int team);
+```
+
+`bool is_eliminated(const Standings& s, int team)`: build a flow network to decide exactly. If some team's `wins[i]` already exceeds the most that `team` can reach, report it as eliminated right away (capacities can't be negative).
+
+## Stage 3 — An elimination certificate
+
+```cpp
+std::vector<int> elimination_certificate(const Standings& s, int team);
+```
+
+`std::vector<int> elimination_certificate(const Standings& s, int team)`: if `team` is not eliminated, return an empty vector; otherwise return a subset `R` of the teams (not including `team`, in increasing order) such that
 
 ```
 (wins(R) + games_within(R)) / |R| > wins[team] + remaining(team)
 ```
 
-其中 `wins(R)` 是 R 中各隊已贏場數總和、`games_within(R)` 是 R 內部剩餘比賽總數、`remaining(team)` 是 `team` 自己剩餘比賽數。這個集合能讓人類一眼看懂：R 內的比賽再怎麼分配，總有一隊贏得比 `team` 多。
+where `wins(R)` is the total number of wins of the teams in R, `games_within(R)` is the total number of games left between teams in R, and `remaining(team)` is the number of games `team` itself has left. A person can understand this set at a glance: however the games within R are split, some team in R ends up with more wins than `team`.
 
-## Stage 4 — 實務延伸：賽季追蹤器
+## Stage 4 — Real-world extension: a season tracker
 
 ```cpp
 class SeasonTracker {
 public:
     explicit SeasonTracker(Standings initial);
-    void record_game(int winner, int loser);        // 一場 winner 勝 loser 的比賽打完
-    std::vector<int> contenders() const;            // 目前沒被 eliminated 的隊伍，升冪
+    void record_game(int winner, int loser);        // a game in which winner beat loser has been played
+    std::vector<int> contenders() const;            // teams that are not eliminated yet, in increasing order
     bool is_contender(int team) const;
 };
 ```
 
-`record_game` 必須是剩下賽程中存在的對戰；不必維護增量狀態，O(n) 次 flow 重算即可。
+Each game passed to `record_game` must be a matchup that is still on the remaining schedule. You don't need to maintain incremental state; recomputing O(n) flows is fine.
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼 max flow 飽和（saturated）和「所有比賽都能分配給 team 上限以下的贏家」等價？Flow integrality 在這裡扮演什麼角色？
-2. Min cut 的另一側為什麼恰好就是淘汰憑證 R？
-3. 如果賽制改成贏得分、平手各得 1 分（足球），這個模型要怎麼改？為什麼難度完全不同？
+Once you're done, answer without looking at your code:
+
+1. Why is a saturated max flow equivalent to "every game can be assigned a winner without anyone going over team's maximum"? What role does flow integrality play here?
+2. Why is the other side of the min cut exactly the elimination certificate R?
+3. If the rules changed so that a win earns points and a tie earns each team 1 point (as in soccer), how would the model change? Why is the difficulty completely different?

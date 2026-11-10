@@ -1,6 +1,6 @@
 ---
-title: 最短路徑的 DP 視角（Bellman-Ford 與 Floyd-Warshall）
-unit: 08 · Dynamic Programming II（PS8）
+title: A DP View of Shortest Paths (Bellman-Ford and Floyd-Warshall)
+unit: 08 · Dynamic Programming II (PS8)
 source: 6.006 Lecture 17
 pdf: materials/6.006/lectures/lec17.pdf
 read: materials/6.006/lectures/lec17.pdf
@@ -8,26 +8,45 @@ kind: code
 minutes: 80
 ---
 
-# 0805 · 最短路徑的 DP 視角
+# 0805 · A DP View of Shortest Paths
 
-> **實務上為什麼會遇到**：「最多轉 k 次機的最便宜航線」、路由表的 distance-vector、都是 Bellman-Ford 的 DP 表。Floyd-Warshall 則在小而密的圖上拿到全點對最短路徑，幾行就寫完，但負環和 overflow 處理才是真正的考點。
+**Based on:** [Lecture 17: Dynamic Programming, Part 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/665523227a175e9e9ce26ea8d3e5b51c_MIT6_006S20_lec17.pdf) · **Read first:** [Lecture 17: Dynamic Programming, Part 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/665523227a175e9e9ce26ea8d3e5b51c_MIT6_006S20_lec17.pdf)
 
-邊用 `Edge{from, to, weight}` 表示（`weight` 可為負，可有平行邊），頂點 `0..vertices−1`。
+> **Why this comes up in practice:** "the cheapest flight route with at most k connections" and the distance vectors in routing tables are both Bellman-Ford's DP table. Floyd-Warshall gets all-pairs shortest paths on small, dense graphs in a few lines of code, but handling negative cycles and overflow is what's really being tested.
+
+## Your task
+
+Edges are given as `Edge{from, to, weight}` (`weight` may be negative, and there may be parallel edges), and the vertices are `0..vertices−1`.
 
 ```cpp
 inline constexpr std::int64_t kUnreachable  = std::numeric_limits<std::int64_t>::max();
 inline constexpr std::int64_t kMinusInfinity = std::numeric_limits<std::int64_t>::min();
 ```
 
-一次只看一關，做完再往下讀。
+Lecture 17 recasts Bellman-Ford and Floyd-Warshall as dynamic programs. Here you implement both, recover the paths, and handle negative cycles without overflowing.
 
-## Stage 1 — 最多 k 條邊
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`std::vector<std::int64_t> shortest_within_edges(int vertices, std::span<const Edge> edges, int source, int max_edges)`：`result[v]` 是從 `source` 出發、走**最多 `max_edges` 條邊**到 `v` 的最小 weight（walk，可重複走同一條邊）；走不到時是 `kUnreachable`。O(max_edges · |E|) 時間。
+Read one stage at a time, and finish it before reading on.
 
-每一輪只能依賴上一輪的結果，否則一輪內就可能走好幾條邊。
+## Stage 1 — At most k edges
 
-## Stage 2 — 全點對最短路徑
+```cpp
+struct Edge {
+    int from;
+    int to;
+    std::int64_t weight;
+};
+
+std::vector<std::int64_t> shortest_within_edges(int vertices, std::span<const Edge> edges,
+                                                int source, int max_edges);
+```
+
+`std::vector<std::int64_t> shortest_within_edges(int vertices, std::span<const Edge> edges, int source, int max_edges)`: `result[v]` is the minimum weight of going from `source` to `v` using **at most `max_edges` edges** (a walk, which may use the same edge more than once); it is `kUnreachable` when `v` can't be reached that way. O(max_edges · |E|) time.
+
+Each round may depend only on the results of the previous round; otherwise a single round could take several edges.
+
+## Stage 2 — All-pairs shortest paths
 
 ```cpp
 class AllPairs {
@@ -39,23 +58,25 @@ public:
 };
 ```
 
-這一關假設沒有負環。`distance(v, v) == 0`，走不到時 `kUnreachable`。O(V³) 時間，O(V²) 記憶體。要小心 `kUnreachable` 不可以被拿去相加。
+This stage assumes there are no negative cycles. `distance(v, v) == 0`, and unreachable pairs give `kUnreachable`. O(V³) time, O(V²) memory. Be careful never to add anything to `kUnreachable`.
 
-## Stage 3 — 路徑
+## Stage 3 — Paths
 
-`path(from, to)`：回傳一條最短路徑上的所有頂點，含兩端；`from == to` 時是 `{from}`；走不到時回傳空 vector。圖可能有 zero-weight 的 cycle，路徑不可以繞圈，最多 `V` 個頂點。
+`path(from, to)`: return every vertex on one shortest path, including both ends; it is `{from}` when `from == to`, and an empty vector when `to` can't be reached. The graph may contain zero-weight cycles, but the path must not go around one, so it has at most `V` vertices.
 
-## Stage 4 — 負環
+## Stage 4 — Negative cycles
 
-允許圖上有負環。
+The graph may now contain negative cycles.
 
-- `has_negative_cycle()`：圖上任何地方有負環就回傳 `true`。
-- `distance(from, to)`：若存在從 `from` 到 `to` 的 walk 可以任意變小（路徑上可以繞負環），回傳 `kMinusInfinity`；其他情況回傳正確的最短距離或 `kUnreachable`，不受遠處負環影響。
-- `path` 在 `distance` 為 `kMinusInfinity` 時回傳空 vector。
-- 不可以 overflow：負環會讓距離每一輪翻倍往下掉，要記得夾住。
+- `has_negative_cycle()`: return `true` if there is a negative cycle anywhere in the graph.
+- `distance(from, to)`: if walks from `from` to `to` can be made arbitrarily cheap (because they can go around a negative cycle on the way), return `kMinusInfinity`; otherwise return the correct shortest distance or `kUnreachable`, unaffected by negative cycles elsewhere.
+- `path` returns an empty vector when `distance` is `kMinusInfinity`.
+- Don't overflow: a negative cycle can make distances double downward every round, so remember to clamp them.
 
-## 面試追問
+## Interview follow-ups
 
-1. Stage 1 的滾動陣列為什麼必須複製一份，Bellman-Ford 原版又為什麼可以就地更新？
-2. Floyd-Warshall 把第三維（`k`）壓掉為什麼仍然正確？負環存在時這個論點哪裡會失效？
-3. 什麼時候應該用 Johnson 而不是 Floyd-Warshall？
+Once you're done, answer without looking at your code:
+
+1. Why must the rolling array in Stage 1 be copied, while the original Bellman-Ford can update in place?
+2. Why is Floyd-Warshall still correct after dropping the third dimension (`k`)? Where does this argument break down when there are negative cycles?
+3. When should you use Johnson's algorithm instead of Floyd-Warshall?

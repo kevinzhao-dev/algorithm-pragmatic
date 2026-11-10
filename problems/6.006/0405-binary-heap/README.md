@@ -1,6 +1,6 @@
 ---
-title: Binary Heap 與 In-Place Heapsort
-unit: 04 · Trees & Heaps（PS4）
+title: Binary Heap and In-Place Heapsort
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 Lecture 8, Recitation 8
 pdf: materials/6.006/recitations/rec08.pdf
 read: materials/6.006/lectures/lec08.pdf
@@ -8,50 +8,97 @@ kind: code
 minutes: 75
 ---
 
-# 0405 · Binary Heap 與 In-Place Heapsort
+# 0405 · Binary Heap and In-Place Heapsort
 
-> **實務上為什麼會遇到**：排程器、Dijkstra、TCP 重組緩衝、Top-K，全都是 priority queue。Linux 的 hrtimer 用紅黑樹，但 Go runtime 的 timer 就是四叉堆；陣列隱式樹的 cache 表現是 pointer-based 結構比不上的。
+**Based on:** [Recitation 8 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/701c2f339890cbf9c0c2a3495d007f26_MIT6_006S20_r08.pdf) · **Read first:** [Lecture 8: Binary Heaps notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/40d4851e550507ca14dc778b9b2266cc_MIT6_006S20_lec8.pdf)
 
-把陣列看成隱式的完全二元樹（`parent(i) = (i-1)/2`、`left(i) = 2i+1`、`right(i) = 2i+2`），用 `std::vector` 當底層，不准用 `std::priority_queue`、`std::push_heap` 等。
+> **Why this comes up in practice:** schedulers, Dijkstra, TCP reassembly buffers, and Top-K are all priority queues. Linux's hrtimer uses a red-black tree, but the Go runtime's timers are a 4-ary heap; the cache behavior of an implicit tree in an array is something pointer-based structures can't match.
 
-`BinaryHeap<T, Compare>` 是**最大堆**（依 `Compare`：`top()` 是使 `Compare` 判定為最大的元素）；傳 `std::greater<>` 就成了最小堆。
+## Your task
 
-## Stage 1 — 基本操作
+Implement a binary heap, then an in-place heapsort, and finally a buffer that puts slightly late events back in order.
 
-- `push(v)`：O(log n)。
-- `top()` / `pop()`：取得／移除堆頂（`pop` 回傳值）。空堆時丟 `std::out_of_range`。`pop` O(log n)。
-- `size()` / `empty()`。
-- `items()`：底層陣列（唯讀的 `std::span`），`items()[0]` 是堆頂。測試用它檢查 heap property。
+Treat an array as an implicit complete binary tree (`parent(i) = (i-1)/2`, `left(i) = 2i+1`, `right(i) = 2i+2`) with a `std::vector` underneath. Do not use `std::priority_queue`, `std::push_heap`, and the like.
 
-元素可以是 move-only，`pop` 用 move 回傳。
+`BinaryHeap<T, Compare>` is a **max-heap** (with respect to `Compare`: `top()` is the element that `Compare` considers largest); pass `std::greater<>` and it becomes a min-heap.
 
-## Stage 2 — O(n) 建堆
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`explicit BinaryHeap(std::vector<T> items, Compare = {})`：**由下往上** sift-down，O(n) 建堆。比較次數不能超過 `3n`（「一個一個 push」要 O(n log n)，測試會數）。
+## Stage 1 — Basic operations
 
-先想一下為什麼 sift-down 建堆是 O(n)，而 sift-up 不是：葉節點佔一半，它們幾乎不用動。
+```cpp
+template <typename T, typename Compare = std::less<T>>
+class BinaryHeap {
+public:
+    explicit BinaryHeap(Compare compare = Compare{});
+
+    void push(T value);
+    const T& top() const;
+    T pop();
+    std::size_t size() const;
+    bool empty() const;
+    std::span<const T> items() const;
+};
+```
+
+- `push(v)`: O(log n).
+- `top()` / `pop()`: get/remove the top of the heap (`pop` returns the value). Throw `std::out_of_range` on an empty heap. `pop` is O(log n); one `push` plus one `pop` may make at most `3⌈lg n⌉ + 8` comparisons in total (the tests count).
+- `size()` / `empty()`.
+- `items()`: the underlying array (as a read-only `std::span`); `items()[0]` is the top. The tests use it to check the heap property.
+
+Elements may be move-only; `pop` returns by move.
+
+## Stage 2 — Building a heap in O(n)
+
+```cpp
+// in class BinaryHeap<T, Compare>
+explicit BinaryHeap(std::vector<T> items, Compare compare = Compare{});
+```
+
+`explicit BinaryHeap(std::vector<T> items, Compare = {})`: build the heap in O(n) by sifting down **from the bottom up**. It must make no more than `3n` comparisons (pushing the items one at a time takes O(n log n), and the tests count).
+
+First think about why building with sift-down is O(n) while sift-up is not: leaves make up half the nodes, and they barely have to move.
 
 ## Stage 3 — In-Place Heapsort
 
-`heapsort(first, last, compare = {})`：把 random access iterator 範圍排成 `compare` 由小到大。
+```cpp
+template <std::random_access_iterator It, typename Compare = std::less<>>
+void heapsort(It first, It last, Compare compare = Compare{});
+```
 
-- O(1) 額外空間：不能把元素複製到別的容器（測試會用 `Tracked` 看活著的物件數量）。不要求穩定。
-- 比較次數 O(n log n)。
-- 可以和 Stage 1 的 sift 函式共用程式碼：把 heap 操作拆成吃 iterator 的 free function，就能同時服務 `BinaryHeap` 和 `heapsort`。
+`heapsort(first, last, compare = {})`: sort a random access iterator range into ascending order according to `compare`.
 
-## Stage 4 — 實務延伸：亂序事件重排
+- O(1) extra space: you must not copy the elements into another container (the tests use `Tracked` to watch the number of live objects, and allow at most 4 extra at any moment). Stability is not required.
+- O(n log n) comparisons (at most `2n⌈lg n⌉ + 3n` in the tests).
+- You may share code with the sift functions from Stage 1: split the heap operations into free functions that take iterators, and they can serve both `BinaryHeap` and `heapsort`.
 
-串流裡的事件可能晚到一點點（網路封包、log 匯流）。`ReorderBuffer<T, Compare>`：
+## Stage 4 — Real-world extension: reordering out-of-order events
 
-- `explicit ReorderBuffer(lateness)`：保證每個事件距離它排序後的位置最多 `lateness` 格（`lateness = 0` 表示已經排好）。
-- `push(item)`：放入事件；緩衝區超過 `lateness` 個事件時，回傳目前最早的事件（依 `Compare` 最小），否則回傳 `std::nullopt`。
-- `drain()`：串流結束時，依序回傳緩衝區剩下的事件。
-- `buffered()`：目前緩衝的數量，永遠不超過 `lateness`。
+```cpp
+template <typename T, typename Compare = std::less<T>>
+class ReorderBuffer {
+public:
+    explicit ReorderBuffer(std::size_t lateness, Compare compare = Compare{});
 
-所有輸出的連接必須是完整的排序結果。每個 `push` 的比較次數 O(log(lateness + 1))（而不是 O(log n)），這就是 heap 大小只留 `lateness + 1` 的好處。
+    std::optional<T> push(T item);
+    std::vector<T> drain();
+    std::size_t buffered() const;
+};
+```
 
-## 面試追問
+Events in a stream may arrive a little late (network packets, merged log streams). `ReorderBuffer<T, Compare>`:
 
-1. 找最大堆裡的最小元素要多久？為什麼不能更快？
-2. Heapsort 跟 mergesort、quicksort 比，常數和快取行為有什麼差別？為什麼 std::sort 不用 heapsort 當主力，卻用它當保底？
-3. 想要支援 `decrease-key`，這個結構還缺什麼？（下一題）
+- `explicit ReorderBuffer(lateness)`: every event is guaranteed to be at most `lateness` positions away from its sorted position (`lateness = 0` means the stream is already sorted).
+- `push(item)`: add an event. When the buffer holds more than `lateness` events, return the earliest event it currently holds (the smallest according to `Compare`); otherwise return `std::nullopt`.
+- `drain()`: when the stream ends, return the events still in the buffer, in order.
+- `buffered()`: the number of events currently buffered, which never exceeds `lateness`.
+
+Concatenating all the outputs must give the complete sorted result. Each `push` makes O(log(lateness + 1)) comparisons (not O(log n); the tests allow `3⌈lg(lateness + 2)⌉ + 6` per event, `drain` included); that is the payoff of keeping the heap at only `lateness + 1` elements.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. How long does it take to find the smallest element of a max-heap? Why can't it be faster?
+2. How do heapsort's constant factors and cache behavior differ from mergesort's and quicksort's? Why doesn't std::sort use heapsort as its workhorse, yet uses it as a fallback?
+3. To support `decrease-key`, what is this structure still missing? (The next exercise.)

@@ -1,6 +1,6 @@
 ---
-title: Edit Distance 與拼字建議
-unit: 07 · Dynamic Programming I（PS7）
+title: Edit Distance and Spelling Suggestions
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 Recitation 16
 pdf: materials/6.006/recitations/rec16.pdf
 read: materials/6.006/recitations/rec16.pdf
@@ -8,22 +8,32 @@ kind: code
 minutes: 100
 ---
 
-# 0703 · Edit Distance 與拼字建議
+# 0703 · Edit Distance and Spelling Suggestions
 
-> **實務上為什麼會遇到**：搜尋框的 did-you-mean、資料清洗的模糊比對、CI 裡的 snapshot diff 都在問同一件事：要改幾個字元才相等。真實系統只關心「差距有沒有在 k 以內」，答案通常在幾步內就知道了，沒必要算完整張表。
+**Based on:** [Recitation 16 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/487dc976eabd0f9bcd6a3c385203ea27_MIT6_006S20_r16.pdf) · **Read first:** [Recitation 16 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/487dc976eabd0f9bcd6a3c385203ea27_MIT6_006S20_r16.pdf)
 
-把字串 `from` 改成 `to`，可用 insert、erase、replace 三種操作。一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** a search box's did-you-mean, fuzzy matching in data cleaning, and snapshot diffs in CI all ask the same question: how many characters must change before two strings are equal? Real systems only care whether the difference is within k, and the answer is usually known within a few steps, so there's no need to fill in the whole table.
 
-## Stage 1 — 最小成本
+## Your task
+
+Turn the string `from` into `to` using three operations: insert, erase, and replace.
+
+Recitation 16 counts the minimum number of edits, each costing one. Here each operation can have its own cost, and you also produce the edit script, cut the memory, compute a distance bounded by a limit, and build a spelling suggester.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Minimum cost
 
 ```cpp
 struct EditCosts { int insert = 1; int erase = 1; int replace = 1; };  // each >= 1
 int edit_distance(std::string_view from, std::string_view to, EditCosts costs = {});
 ```
 
-O(|from||to|) 時間。三種操作的成本可以不同，replace 甚至可能比 insert 加 erase 還貴，要選最便宜的做法。
+O(|from||to|) time. The three operations may cost different amounts, and replace may even cost more than an insert plus an erase, so you must pick the cheapest way.
 
-## Stage 2 — 編輯腳本
+## Stage 2 — The edit script
 
 ```cpp
 enum class EditOp { Insert, Erase, Replace };
@@ -31,21 +41,26 @@ struct Edit { EditOp op; std::size_t at; char ch; };
 std::vector<Edit> edit_script(std::string_view from, std::string_view to, EditCosts costs = {});
 ```
 
-依序套用腳本，字串要從 `from` 變成 `to`，總成本要等於 Stage 1 的答案。**`at` 是套用這一步當下字串的位置**：`Insert` 在 `at` 之前插入 `ch`，`Erase` 刪掉 `at` 的字元，`Replace` 把 `at` 的字元換成 `ch`（`ch` 在 `Erase` 時可為任意值）。
+Applying the script in order must turn `from` into `to`, and its total cost must equal the answer from Stage 1. **`at` is a position in the string as it stands when that step is applied:** `Insert` inserts `ch` before `at`, `Erase` deletes the character at `at`, and `Replace` changes the character at `at` to `ch` (for `Erase`, `ch` may be any value).
 
-## Stage 3 — `edit_distance` 降到 O(min(|from|, |to|)) 記憶體
+## Stage 3 — Cut `edit_distance` to O(min(|from|, |to|)) memory
 
-Heap 高水位要在較短字串長度的線性範圍內。
+The heap high-water mark must stay linear in the length of the shorter string, in both argument orders (the tests allow at most 32 bytes per character of the shorter string, and at most 8 KiB when it has only 16 characters).
 
-## Stage 4 — 有上限的距離
+## Stage 4 — Bounded distance
 
-`std::optional<int> edit_distance_within(from, to, limit)`：單位成本，距離 ≤ `limit` 時回傳距離，否則 `std::nullopt`。
+```cpp
+std::optional<int> edit_distance_within(std::string_view from, std::string_view to,
+                                        int limit);
+```
 
-- 時間 O(limit · min(|from|, |to|))，記憶體 O(limit)。只有對角線附近的格子可能在答案上。
-- 長度差已經超過 `limit` 時，不用掃就能回答。
-- `limit` 可能比字串長很多（例如 10⁹），不可以照著它配置記憶體。
+`std::optional<int> edit_distance_within(from, to, limit)`: with unit costs, return the distance when it is ≤ `limit`, and `std::nullopt` otherwise.
 
-## Stage 5 — 實務延伸：拼字建議
+- Time O(limit · min(|from|, |to|)), memory O(limit). Only the cells near the diagonal can lie on the answer.
+- When the length difference already exceeds `limit`, you can answer without scanning.
+- `limit` may be much larger than the strings (for example 10⁹), so you must not allocate memory based on it (for two short words and a `limit` of 10⁹, the tests allow at most 4 KiB of heap).
+
+## Stage 5 — Real-world extension: spelling suggestions
 
 ```cpp
 struct Suggestion { std::string_view word; int distance; };
@@ -53,10 +68,12 @@ std::vector<Suggestion> suggest(std::string_view query,
                                 std::span<const std::string> dictionary, int limit);
 ```
 
-回傳字典裡單位成本距離 ≤ `limit` 的所有字，依距離遞增、同距離依字典序遞增排序。`dictionary` 內的字互不相同，`word` 指向 `dictionary` 裡的字串。
+Return every word in the dictionary whose unit-cost distance is ≤ `limit`, sorted by increasing distance, and by increasing lexicographic order among words at the same distance. The words in `dictionary` are all distinct, and `word` points to a string in `dictionary`.
 
-## 面試追問
+## Interview follow-ups
 
-1. Stage 3 把字串對調以節省記憶體時，insert 和 erase 的成本為什麼要跟著對調？
-2. Stage 4 為什麼只看 `|j - i| ≤ limit` 就夠？列出它不適用的成本設定。
-3. 字典有上億個字時逐一比對太慢，你會怎麼建索引（BK-tree、trigram index）？各有什麼代價？
+Once you're done, answer without looking at your code:
+
+1. When Stage 3 swaps the two strings to save memory, why must the insert and erase costs be swapped too?
+2. Why is it enough for Stage 4 to look only at `|j - i| ≤ limit`? List the cost settings where this doesn't apply.
+3. With hundreds of millions of words in the dictionary, comparing them one by one is too slow. How would you build an index (BK-tree, trigram index)? What does each one cost?

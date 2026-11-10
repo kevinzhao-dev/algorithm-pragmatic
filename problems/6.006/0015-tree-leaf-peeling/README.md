@@ -1,6 +1,6 @@
 ---
-title: 判斷樹與 Leaf Peeling（歸納法變演算法）
-unit: 00 · Warm-up（PS0）
+title: Tree Recognition and Leaf Peeling (turning induction into an algorithm)
+unit: 00 · Warm-up (PS0)
 source: 6.006 PS0 Problem 0-5
 pdf: materials/6.006/psets/ps0/questions.pdf
 answer: materials/6.006/psets/ps0/solutions.pdf
@@ -8,39 +8,81 @@ kind: code
 minutes: 60
 ---
 
-# 0015 · 判斷樹與 Leaf Peeling
+# 0015 · Tree Recognition and Leaf Peeling
 
-> **實務上為什麼會遇到**：網路拓樸、組織架構、設定檔的父子關係常要求「一定是樹」。如果在交換器之間多接一條線，broadcast 封包會繞著 loop 打轉（broadcast storm），網管系統就要找出那條 loop。
+**Original problem:** [Problem Set 0 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/60f0a029ab154553cad51b54cc25605b_MIT6_006S20_ps0-questions.pdf)
 
-作業原題要你用歸納法證明「連通且 `|E| = |V| − 1` 的無向圖沒有環」。證明的核心是：這種圖一定有 degree 為 1 的頂點，拔掉它後規模少 1。這題把這個歸納過程直接寫成演算法，證明本身放在面試追問。
+> **Why this comes up in practice:** network topologies, org charts, and the parent-child relationships in config files are often required to be trees. Plug one extra cable in between two switches and broadcast packets circle the loop forever (a broadcast storm), so the network management system has to find that loop.
 
-圖用 `n`（頂點編號 `0…n−1`，`n ≥ 1`）和無向邊的清單表示，可能有 self-loop（`u == v`）和重複的邊（parallel edges，兩條都算）。所有函式都必須是 **O(V + E)**，而且不可遞迴（一條長度一百萬的路徑圖，遞迴會把 stack 撐爆）。
+## Original problem
 
-## Stage 1 — 三個判斷
+6.006 PS0 Problem 0-5 asks for a written proof by induction about undirected graphs: if a graph G = (V, E) is connected and has exactly one edge fewer than it has vertices, |E| = |V| − 1, then G contains no cycle. There is only this one part, and there is no code to write.
 
-- `is_connected(n, edges)`：是否連通。
-- `is_acyclic(n, edges)`：是否沒有環。self-loop 和 parallel edges 都算環。
-- `is_tree(n, edges)`：連通且無環。
+## Your task
 
-測試會枚舉所有小圖，順便驗證原題的定理。
+The original problem asks you to prove by induction that "a connected undirected graph with `|E| = |V| − 1` has no cycle." The heart of the proof: such a graph always has a vertex of degree 1, and removing it shrinks the problem by 1. This exercise writes that inductive process directly as an algorithm; the proof itself is in the interview follow-ups.
 
-## Stage 2 — 把證明寫成一段 trace
+A graph is given as `n` (the vertices are numbered `0…n−1`, `n ≥ 1`) and a list of undirected edges. It may contain self-loops (`u == v`) and repeated edges (parallel edges; both of them count). Every function must be **O(V + E)** and must not recurse (on a path graph one million vertices long, recursion would overflow the stack).
 
-`peel_order(n, edges)`：若圖是一棵樹，回傳 `n − 1` 筆 `Peel{leaf, neighbor}`，描述歸納證明的過程：
+You decide whether a graph is a tree, record the leaf-peeling order that the proof describes, and finally find the one cycle in a graph that has a single edge too many, which the original problem doesn't have.
 
-> 每一步 `leaf` 在**目前剩下**的圖中 degree 恰為 1，它唯一的鄰居是 `neighbor`；把 `leaf` 與這條邊拿掉。全部做完只剩一個頂點。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-若不是樹，回傳 `std::nullopt`。`n = 1` 且無邊時，回傳空的清單（單一頂點本來就是樹）。測試會逐筆驗證這段 trace，順序不限定。
+## Stage 1 — Three checks
 
-## Stage 3 — 實務延伸：找出那條 loop
+```cpp
+struct Edge {
+    int u;
+    int v;
+};
 
-給定一張**連通且恰有 n 條邊**的圖（也就是樹多一條邊，恰好一個環）。`find_cycle(n, edges)` 回傳環上的頂點，依環的順序排列，起點與方向不限。
+bool is_connected(int n, std::span<const Edge> edges);
+bool is_acyclic(int n, std::span<const Edge> edges);
+bool is_tree(int n, std::span<const Edge> edges);
+```
 
-- self-loop 時回傳單一頂點；一對 parallel edges 時回傳那兩個端點。
-- 提示：Stage 2 的 peeling 在這張圖上做到底，**剩下的就只有環**。
+- `is_connected(n, edges)`: whether the graph is connected.
+- `is_acyclic(n, edges)`: whether the graph has no cycle. Self-loops and parallel edges both count as cycles.
+- `is_tree(n, edges)`: connected and acyclic.
 
-## 面試追問
+The tests enumerate every small graph, which also checks the original problem's theorem along the way.
 
-1. 口頭完成原題的歸納證明：為什麼一定存在 degree 1 的頂點？（提示：平均 degree）拔掉後為什麼還是連通且 `|E| = |V| − 1`？
-2. 同樣的題目，什麼時候你會改用 union-find？它能做到 peeling 做不到的什麼？
-3. Stage 1 的「邊數 + 連通分量數 == 頂點數」判斷法，為什麼在有 parallel edges 時仍然正確？
+## Stage 2 — Writing the proof as a trace
+
+```cpp
+struct Peel {
+    int leaf;
+    int neighbor;
+};
+
+std::optional<std::vector<Peel>> peel_order(int n, std::span<const Edge> edges);
+```
+
+`peel_order(n, edges)`: if the graph is a tree, return `n − 1` entries `Peel{leaf, neighbor}` that describe the steps of the inductive proof:
+
+> At each step, `leaf` has degree exactly 1 in the graph **that remains at that point**, and its only neighbor is `neighbor`; remove `leaf` and that edge. Once every step is done, only one vertex is left.
+
+If the graph is not a tree, return `std::nullopt`. When `n = 1` and there are no edges, return an empty list (a single vertex is already a tree). The tests verify the trace entry by entry and don't require any particular order.
+
+## Stage 3 — Real-world extension: find that loop
+
+```cpp
+std::vector<int> find_cycle(int n, std::span<const Edge> edges);
+```
+
+You are given a graph that is **connected and has exactly n edges** (that is, a tree plus one edge, so it has exactly one cycle). `find_cycle(n, edges)` returns the vertices on the cycle in cycle order; any starting vertex and either direction is fine.
+
+- For a self-loop, return the single vertex; for a pair of parallel edges, return their two endpoints.
+- Hint: run Stage 2's peeling on this graph until it can go no further, and **only the cycle is left**.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Finish the original problem's inductive proof out loud: why must a vertex of degree 1 exist? (Hint: the average degree.) After you remove it, why is the graph still connected with `|E| = |V| − 1`?
+2. For the same problem, when would you switch to union-find? What can it do that peeling can't?
+3. Why is Stage 1's "edges + connected components == vertices" test still correct when there are parallel edges?
+
+---
+
+**Official solution:** [Problem Set 0 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/cfc7d2d5bc3b9f4df35b5bdc7aa49284_MIT6_006S20_ps0-solutions.pdf). Read it after you finish.

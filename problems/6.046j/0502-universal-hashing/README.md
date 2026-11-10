@@ -1,6 +1,6 @@
 ---
-title: Universal Hashing（抵抗 Hash Flooding）
-unit: 05 · Skip Lists、Hashing 與 DP（PS5）
+title: Universal Hashing (defending against hash flooding)
+unit: 05 · Skip Lists, Hashing, and DP (PS5)
 source: 6.046J Lecture 8
 pdf: materials/6.046j/lectures/lec08.pdf
 read: materials/6.046j/lectures/lec08.pdf
@@ -10,44 +10,105 @@ minutes: 100
 
 # 0502 · Universal Hashing
 
-> **實務上為什麼會遇到**：雜湊表一旦被攻擊者知道雜湊函數，就能造出全部撞在同一格的 key，把服務打回 O(n²)。這就是 hash flooding，也是 Python、Rust 預設亂數化雜湊的原因。
+**Based on:** [Randomization: Universal & Perfect Hashing](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/5e4c05ec33ad4e733c1e6a247f21d1de_MIT6_046JS15_lec08.pdf) · **Read first:** [Randomization: Universal & Perfect Hashing](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/5e4c05ec33ad4e733c1e6a247f21d1de_MIT6_046JS15_lec08.pdf)
 
-## Stage 1 — Dot-Product Family
+> **Why this comes up in practice:** once an attacker knows a hash table's hash function, they can craft keys that all land in the same slot and knock the service back to O(n²). This is hash flooding, and it is why Python and Rust randomize their hashing by default.
 
-`DotProductHash(slots, rng)`：`slots` 是質數且 `< 2^31`（否則丟 `std::invalid_argument`）。把 key 看成 `slots` 進位的數字，產生相同位數的隨機向量，`h(k) = a·k mod slots`。
+## Your task
 
-- 要涵蓋全部 64 位元：key 的最高位數字也要參與運算。
-- 測試會直接量碰撞率：對固定一對 key，獨立抽很多次函數，碰撞機率不能明顯超過 `1/slots`。
+You build the two universal hash families from Lecture 8, then a chained hash table that draws a new random function every time it grows, and finally a rate limiter whose keys an attacker controls.
 
-## Stage 2 — 實務上的 Family
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`LinearHash(slots, rng)`：`h(k) = ((a·k + b) mod p) mod slots`，`p = 2^61 − 1`，`a ∈ [1, p)`、`b ∈ [0, p)`。`slots ≥ 1`（否則丟 `std::invalid_argument`）。Key 保證 `< p`。
+## Stage 1 — The dot-product family
 
-## Stage 3 — 雜湊表
+```cpp
+class DotProductHash {
+public:
+    DotProductHash(std::uint64_t slots, std::mt19937_64& rng);
 
-`UniversalHashMap<V>`：用鏈結（每格一個 `std::vector`）解決碰撞。`key ≥ p` 時所有操作丟 `std::invalid_argument`。
+    std::uint64_t slots() const;
+    std::uint64_t operator()(std::uint64_t key) const;
+};
+```
 
-| 操作 | 行為 |
+`DotProductHash(slots, rng)`: `slots` is a prime `< 2^31` (otherwise throw `std::invalid_argument`). Treat the key as a number written in base `slots`, draw a random vector with the same number of digits, and let `h(k) = a·k mod slots`.
+
+- Cover all 64 bits: the key's most significant digit must take part in the computation too.
+- The tests measure the collision rate directly: for a fixed pair of keys, they draw the function independently many times, and the collision probability must not noticeably exceed `1/slots`.
+
+## Stage 2 — A practical family
+
+```cpp
+inline constexpr std::uint64_t kHashPrime = (std::uint64_t{1} << 61) - 1;  // p, provided
+
+class LinearHash {
+public:
+    LinearHash(std::uint64_t slots, std::mt19937_64& rng);
+
+    std::uint64_t slots() const;
+    std::uint64_t operator()(std::uint64_t key) const;
+};
+```
+
+`LinearHash(slots, rng)`: `h(k) = ((a·k + b) mod p) mod slots`, with `p = 2^61 − 1`, `a ∈ [1, p)`, and `b ∈ [0, p)`. `slots ≥ 1` (otherwise throw `std::invalid_argument`). Keys are guaranteed to be `< p`.
+
+## Stage 3 — The hash table
+
+```cpp
+template <typename V>
+class UniversalHashMap {
+public:
+    explicit UniversalHashMap(std::uint64_t seed = 6046);
+
+    std::size_t size() const;
+    bool empty() const;
+    std::size_t bucket_count() const;
+    std::size_t longest_chain() const;
+
+    bool insert(std::uint64_t key, V value);
+    V* find(std::uint64_t key);
+    const V* find(std::uint64_t key) const;
+    bool erase(std::uint64_t key);
+};
+```
+
+`UniversalHashMap<V>`: resolve collisions by chaining (one `std::vector` per slot). Every operation throws `std::invalid_argument` when `key ≥ p`.
+
+| Operation | Behavior |
 | --- | --- |
-| `insert(key, value)` | 新增回傳 `true`；已存在時覆寫值並回傳 `false` |
-| `find(key)` | 回傳值的指標，不存在回傳 `nullptr` |
-| `erase(key)` | 回傳是否真的刪除 |
-| `size()`、`empty()`、`bucket_count()` | |
-| `longest_chain()` | 最長的格子長度（診斷用，可以 O(m)） |
+| `insert(key, value)` | Return `true` for a new key; if the key already exists, overwrite its value and return `false` |
+| `find(key)` | Return a pointer to the value, or `nullptr` if the key is absent |
+| `erase(key)` | Return whether a key was actually deleted |
+| `size()`, `empty()`, `bucket_count()` | |
+| `longest_chain()` | The length of the longest slot (for diagnostics; O(m) is fine) |
 
-**load factor 保持 ≤ 1**，滿了就把 bucket 數加倍，並用**新的隨機函數**重新雜湊。沒有這一步，攻擊者一旦試出函數的結構，下一輪重建也不會更安全。測試會用全部相差 `2^40` 倍數的 key 灌爆，檢查最長鏈 `≤ 3 lg n`。
+**Keep the load factor ≤ 1**: when the table is full, double the number of buckets and rehash with a **new random function**. Without this step, once an attacker has worked out the structure of the function, the next rebuild is no safer. The tests flood the table with keys that all differ by multiples of `2^40` and check that the longest chain is `≤ 3 lg n`.
 
-## Stage 4 — 實務延伸：抗攻擊的 Rate Limiter
+## Stage 4 — Real-world extension: an attack-resistant rate limiter
 
-`RateLimiter(limit, window, seed)`：固定窗口計數器，`limit`、`window` 都要為正，否則丟 `std::invalid_argument`。
+```cpp
+class RateLimiter {
+public:
+    RateLimiter(std::uint64_t limit, std::int64_t window, std::uint64_t seed = 6046);
 
-- `allow(client, now)`：時間切成長度 `window` 的格子（`floor(now / window)`，負時間也要對），同一格內同一 client 最多放行 `limit` 次，超過回傳 `false`。
-- `client_count()`：見過幾個 client。`longest_chain()` 同 Stage 3。
+    bool allow(std::uint64_t client, std::int64_t now);
+    std::size_t client_count() const;
+    std::size_t longest_chain() const;
+};
+```
 
-client id 由外部決定，是會被攻擊者控制的輸入。
+`RateLimiter(limit, window, seed)`: a fixed-window counter. Both `limit` and `window` must be positive; otherwise throw `std::invalid_argument`.
 
-## 面試追問
+- `allow(client, now)`: time is cut into windows of length `window` (`floor(now / window)`, which must also be right for negative times). Within one window, each client is let through at most `limit` times; beyond that, return `false`.
+- `client_count()`: how many clients have been seen. `longest_chain()` is as in Stage 3.
 
-1. Universal 的定義是什麼？為什麼 `h(k) = k mod m` 或 `h(k) = (a·k) mod m` 都不算？
-2. 雜湊函數的 Dot-product 為什麼要求 `m` 是質數？`LinearHash` 為什麼 `m` 不用是質數，卻要多一個 `b`？
-3. Rate limiter 的 map 會一直長大，真實系統你會怎麼處理？固定窗口和 sliding log、GCRA 比，取捨是什麼？
+Client IDs are chosen from outside, so they are input that an attacker can control.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. What is the definition of universal? Why do neither `h(k) = k mod m` nor `h(k) = (a·k) mod m` qualify?
+2. Why does the dot-product hash function require `m` to be prime? Why doesn't `LinearHash` need a prime `m`, yet needs an extra `b`?
+3. The rate limiter's map keeps growing; how would you handle that in a real system? What are the trade-offs between a fixed window and a sliding log or GCRA?

@@ -1,6 +1,6 @@
 ---
-title: Singly Linked List 與 Floyd 環偵測
-unit: 01 · Sequences（PS1）
+title: Singly Linked List and Floyd Cycle Detection
+unit: 01 · Sequences (PS1)
 source: 6.006 Recitation 2
 pdf: materials/6.006/recitations/rec02.pdf
 read: materials/6.006/lectures/lec02.pdf
@@ -10,44 +10,123 @@ minutes: 80
 
 # 0102 · Singly Linked List
 
-> **實務上為什麼會遇到**：free list、hash table 的 bucket 鏈、kernel 的 task list 都是單向鏈結串列。而鏈結串列最常見的 bug 之一就是指標形成環，走訪永遠停不下來，這正是 Floyd 演算法要解決的問題。
+**Based on:** [Recitation 2 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/c08a3b63dfe5f6f6b32257d35f86ae63_MIT6_006S20_r02.pdf) · **Read first:** [Lecture 2: Data Structures notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/79a07dc1cb47d76dae2ffedc701e3d2b_MIT6_006S20_lec2.pdf)
 
-一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** free lists, the bucket chains of a hash table, and the kernel's task list are all singly linked lists. One of the most common linked-list bugs is pointers that form a cycle, so a traversal never stops, and that is exactly the problem Floyd's algorithm solves.
 
-## Stage 1 — 節點與所有權
+## Your task
 
-`LinkedListSeq<T>` 擁有自己的節點，`Node` 的結構已經寫在骨架裡。
+Implement `LinkedListSeq<T>`, a singly linked list that owns its nodes: operations at the front, index-based operations with STL-style iterators, and in-place reversal. Stage 4 then detects cycles with Floyd's algorithm on any node type that has a `next` pointer.
 
-| 操作 | 行為 | 複雜度 |
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Nodes and ownership
+
+```cpp
+template <typename T>
+class LinkedListSeq {
+public:
+    struct Node {
+        explicit Node(T value) : item(std::move(value)) {}
+        T item;
+        Node* next = nullptr;
+    };
+
+    LinkedListSeq();
+    explicit LinkedListSeq(std::span<const T> items);
+
+    ~LinkedListSeq();
+
+    LinkedListSeq(const LinkedListSeq&) = delete;
+    LinkedListSeq& operator=(const LinkedListSeq&) = delete;
+
+    LinkedListSeq(LinkedListSeq&& other);             // should be noexcept once implemented
+    LinkedListSeq& operator=(LinkedListSeq&& other);  // should be noexcept once implemented
+
+    std::size_t size() const;
+    bool empty() const;
+    Node* head() const;
+
+    Node* insert_first(T value);
+    T delete_first();
+};
+```
+
+`LinkedListSeq<T>` owns its nodes, and the `Node` struct is already written in the skeleton.
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `LinkedListSeq()` / `explicit LinkedListSeq(span<const T>)` | 空串列 / 依序建立 | O(1) / O(n) |
-| `insert_first(v)` | 插入到最前面，回傳新節點 | O(1) |
-| `delete_first()` | 移除並回傳最前面的值；空串列丟 `std::out_of_range` | O(1) |
-| `head()`、`size()`、`empty()` | | O(1) |
-| 解構子 | 釋放所有節點，不可遞迴 | O(n) |
+| `LinkedListSeq()` / `explicit LinkedListSeq(span<const T>)` | Empty list / build in order | O(1) / O(n) |
+| `insert_first(v)` | Insert at the front and return the new node | O(1) |
+| `delete_first()` | Remove and return the front value; throw `std::out_of_range` if the list is empty | O(1) |
+| `head()`, `size()`, `empty()` | | O(1) |
+| Destructor | Free every node, without recursion | O(n) |
 
-Copy 已禁止；補上 move constructor 與 move assignment（被搬走的串列要變成空的、size 為 0）。
+Copying is already disabled. Add a move constructor and move assignment (a moved-from list must become empty, with size 0).
 
-## Stage 2 — 索引操作與迭代器
+## Stage 2 — Index operations and iterators
 
-| 操作 | 行為 | 複雜度 |
+```cpp
+// in class LinkedListSeq<T>
+template <bool IsConst>
+class BasicIterator {
+public:
+    using value_type = T;
+    using difference_type = std::ptrdiff_t;
+    using reference = std::conditional_t<IsConst, const T&, T&>;
+    using pointer = std::conditional_t<IsConst, const T*, T*>;
+    using iterator_category = std::forward_iterator_tag;
+
+    BasicIterator() = default;
+
+    reference operator*() const;
+    pointer operator->() const;
+    BasicIterator& operator++();
+    BasicIterator operator++(int);
+    friend bool operator==(const BasicIterator& a, const BasicIterator& b);
+};
+
+using iterator = BasicIterator<false>;
+using const_iterator = BasicIterator<true>;
+
+const T& get_at(std::size_t i) const;
+void set_at(std::size_t i, T value);
+Node* insert_at(std::size_t i, T value);
+T delete_at(std::size_t i);
+Node* insert_last(T value);
+T delete_last();
+
+iterator begin();
+iterator end();
+const_iterator begin() const;
+const_iterator end() const;
+```
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `get_at(i)` / `set_at(i, v)` | 讀寫第 `i` 個元素；超出範圍丟 `std::out_of_range` | O(i) |
-| `insert_at(i, v)` | 在索引 `i` 之前插入，`0 ≤ i ≤ size()`，回傳新節點 | O(i) |
-| `delete_at(i)` | 刪除並回傳第 `i` 個元素 | O(i) |
-| `insert_last(v)` / `delete_last()` | 尾端操作（這個串列沒有 tail，O(n) 沒關係） | O(n) |
+| `get_at(i)` / `set_at(i, v)` | Read or write element `i`; throw `std::out_of_range` if it is out of range | O(i) |
+| `insert_at(i, v)` | Insert before index `i`, `0 ≤ i ≤ size()`, and return the new node | O(i) |
+| `delete_at(i)` | Delete and return element `i` | O(i) |
+| `insert_last(v)` / `delete_last()` | Operations at the end (this list has no tail, so O(n) is fine) | O(n) |
 
-失敗的操作不可改變串列內容。
+A failed operation must not change the list's contents.
 
-再補上 STL 風格的 forward iterator：`iterator` 與 `const_iterator`（可以用 range-for、`std::find`），並要滿足 `std::forward_iterator` concept。`begin()`/`end()` 各有 `const` 與非 `const` 版本。
+Then add STL-style forward iterators, `iterator` and `const_iterator` (they work with range-for and `std::find`), which must satisfy the `std::forward_iterator` concept. `begin()`/`end()` each have a `const` and a non-`const` version.
 
-## Stage 3 — 原地反轉
+## Stage 3 — In-place reversal
 
-`reverse()`：把串列整個反轉。**O(n) 時間、O(1) 額外空間，只改指標**：節點不可重建、元素不可複製或搬動（測試會檢查節點位址與元素的 move 次數）。不可遞迴。
+```cpp
+// in class LinkedListSeq<T>
+void reverse();
+```
 
-## Stage 4 — Floyd 環偵測
+`reverse()`: reverse the whole list. **O(n) time and O(1) extra space, changing only pointers**: do not rebuild nodes, and do not copy or move elements (the tests check node addresses and how many times elements are moved). Do not recurse.
 
-下面這個函式作用在**任意帶有 `next` 指標的節點型別**上（不是你的串列）。`head` 可能是 `nullptr`，節點的 `next` 鏈可能形成一個環（ρ 形：一段尾巴接上一個環）。
+## Stage 4 — Floyd cycle detection
+
+The function below works on **any node type that has a `next` pointer** (not on your list). `head` may be `nullptr`, and the chain of `next` pointers may form a cycle (a ρ shape: a tail that runs into a loop).
 
 ```cpp
 template <typename Node>
@@ -56,12 +135,14 @@ struct CycleInfo { std::size_t length; const Node* entry; };
 std::optional<CycleInfo<Node>> find_cycle(const Node* head);
 ```
 
-沒有環時回傳 `std::nullopt`；有環時回傳環上的節點數，以及從 `head` 走進環時遇到的**第一個**環上節點。
+If there is no cycle, return `std::nullopt`. If there is one, return the number of nodes on the cycle and the **first** node on the cycle that you reach when walking from `head`.
 
-要求 **O(n) 時間、O(1) 額外空間**（測試會確認沒有任何 heap allocation，也就是不能用 visited set）。
+It must take **O(n) time and O(1) extra space** (the tests confirm that there is no heap allocation at all, which means you can't use a visited set).
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼快慢指標一定會相遇？相遇點和環的入口有什麼關係，第二階段為什麼會在入口相會？
-2. 用 `std::unique_ptr<Node>` 當 `next` 時，解構子為什麼可能 stack overflow？要怎麼解？
-3. 什麼情況下鏈結串列真的會比 `std::vector` 快？現代 CPU 的快取會怎麼影響這個判斷？
+Once you're done, answer without looking at your code:
+
+1. Why are the fast and slow pointers guaranteed to meet? How is the meeting point related to the entry of the cycle, and why does the second phase meet exactly at the entry?
+2. When `next` is a `std::unique_ptr<Node>`, why can the destructor overflow the stack? How do you fix it?
+3. When is a linked list actually faster than `std::vector`? How do the caches of a modern CPU affect that judgment?

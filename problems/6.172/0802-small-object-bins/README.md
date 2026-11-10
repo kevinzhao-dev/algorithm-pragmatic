@@ -1,7 +1,7 @@
 ---
-title: Small-Object Bins（size class 配置器）
-unit: 08 · Storage Allocation（HW6）
-source: 6.172 Lecture 11 Variable-Size Allocation（binned free lists）
+title: Small-Object Bins (size-class allocator)
+unit: 08 · Storage Allocation (HW6)
+source: 6.172 Lecture 11 Variable-Size Allocation (binned free lists)
 pdf: materials/6.172/lectures/lec11.pdf
 kind: perf
 minutes: 90
@@ -9,35 +9,83 @@ minutes: 90
 
 # 0802 · Small-Object Bins
 
-> **實務上為什麼會遇到**：tcmalloc、jemalloc、mimalloc 的快路徑都是這個結構：把請求大小 round up 到某個 size class，每個 class 一條 free list。理解它，才講得清楚為什麼「配置 33 bytes 其實拿到 48」、以及為什麼 sized delete 能省下 header。
+**Based on:** [Storage Allocation](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/68624442da6047731a33b3590cefd030_MIT6_172F18_lec11.pdf)
 
-用 power-of-two 的 bin 做一個小物件配置器：16、32、…、4096 bytes 共 9 個 bin，每個 bin 一條 free list，整個 chunk 只切給一個 bin 用。大於 4096 bytes 的請求直接交給 `::operator new`。
+> **Why this comes up in practice:** the fast paths of tcmalloc, jemalloc, and mimalloc all have this structure: round the request size up to a size class and keep one free list per class. Once you understand it, you can explain why "allocating 33 bytes actually gets you 48" and why sized delete can save a header.
 
-## Stage 1 — size class
+## Your task
 
-`bin_index(size)`：回傳能放下 `size` 的最小 bin（16-byte bin 是 0，4096-byte bin 是 8）。`size` 的範圍是 1 到 4096。`bin_size(index)` 回傳該 bin 的 block 大小。兩個都要是 O(1)。
+Build a small-object allocator with power-of-two bins: 9 bins of 16, 32, …, 4096 bytes, one free list per bin, and each chunk is carved up for a single bin only. Requests larger than 4096 bytes go straight to `::operator new`.
 
-## Stage 2 — 配置與歸還
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `allocate(size)`（1 ≤ size ≤ 4096）：從對應 bin 的 free list 拿；沒有就從這個 bin 的目前 chunk 切一塊；chunk 也用完就向 upstream 要新的，大小為建構子給的 `chunk_bytes`。
-- `deallocate(p, size)`：`size` 必須與當初 `allocate` 的引數相同，因此 block 上**不需要 header**。O(1) 放回對應 bin。
-- 回傳的指標對齊到 16。每個 bin 的 free list 都是 LIFO。
+## Stage 1 — Size classes
 
-不同 bin 的 block 絕對不能互相重疊，同一個 bin 的 block 歸還後不可以被拿去服務別的 bin。
+```cpp
+// Where raw chunks come from. The default forwards to operator new.
+struct NewDeleteUpstream {
+    void* allocate(std::size_t bytes) { return ::operator new(bytes); }
+    void deallocate(void* p, std::size_t /*bytes*/) noexcept { ::operator delete(p); }
+};
 
-## Stage 3 — 大請求與邊界
+template <typename Upstream = NewDeleteUpstream>
+class BinnedAllocator {
+public:
+    static constexpr std::size_t kBinCount = 9;
+    static constexpr std::size_t kMaxBinSize = 4096;
 
-- `size > 4096`：allocate 走 `::operator new`，deallocate（依 size 判斷）走 `::operator delete`，`large_allocations()` 回傳曾經走這條路的次數。
-- `size == 0`：當作 1 byte 處理，回傳的指標可以正常 deallocate，對應的 `deallocate(p, 0)` 不可以出錯。
-- 解構子把所有 chunk 還給 upstream。
-- `live_bytes()`：所有尚未歸還的請求，**使用者要求的 bytes**（不是 block 大小）總和。
+    static std::size_t bin_index(std::size_t size);
+    static std::size_t bin_size(std::size_t index);
+};
+```
 
-## Stage 4 — 量測
+`bin_index(size)`: return the smallest bin that can hold `size` (the 16-byte bin is 0 and the 4096-byte bin is 8). `size` ranges from 1 to 4096. `bin_size(index)` returns that bin's block size. Both must be O(1).
 
-沒有新介面。`PERF` 會用同一個執行檔，拿混合大小的小物件工作負載，比較你的配置器和 `::operator new/delete`，要快 2 倍以上（僅 Release）。
+## Stage 2 — Allocating and freeing
 
-## 面試追問
+```cpp
+// in class BinnedAllocator<Upstream>
+explicit BinnedAllocator(std::size_t chunk_bytes = 1 << 16, Upstream upstream = Upstream{});
 
-1. Stage 3 的 `live_bytes()` 與 upstream 給出去的 bytes 差多少才算「浪費」？internal fragmentation 的上界是多少？用 power-of-two bin 是最好的選擇嗎？
-2. Lecture 11 分析說，binned free list 可能用到 O(M log M) 的虛擬記憶體，為什麼？跟 external fragmentation 的關係是什麼？
-3. 為什麼 C++14 的 sized deallocation 對這種配置器是加分？如果呼叫端傳錯 size，會在什麼時候、以什麼形式出事？
+BinnedAllocator(const BinnedAllocator&) = delete;
+BinnedAllocator& operator=(const BinnedAllocator&) = delete;
+
+void* allocate(std::size_t size);
+void deallocate(void* p, std::size_t size);
+```
+
+- `allocate(size)` (1 ≤ size ≤ 4096): take a block from the matching bin's free list; if it is empty, carve one from this bin's current chunk; if that chunk is used up too, request a new one from the upstream, of the size `chunk_bytes` given to the constructor.
+- `deallocate(p, size)`: `size` must equal the argument originally passed to `allocate`, so blocks **need no header**. Put the block back in its bin in O(1).
+- Returned pointers are aligned to 16. Every bin's free list is LIFO.
+
+Blocks of different bins must never overlap, and a block returned to one bin must not be used to serve another bin.
+
+Keep any per-chunk header small: with 1 KiB chunks, 100 allocations of 100 bytes may request at most 16 chunks from the upstream.
+
+## Stage 3 — Large requests and edge cases
+
+```cpp
+// in class BinnedAllocator<Upstream>
+~BinnedAllocator();  // returns every chunk to the upstream
+std::size_t large_allocations() const;
+std::size_t live_bytes() const;
+```
+
+- `size > 4096`: allocate goes through `::operator new` and deallocate (deciding by size) through `::operator delete`; `large_allocations()` returns how many times this path has been taken. Large requests never touch the upstream.
+- `size == 0`: treat it as 1 byte. The returned pointer can be deallocated normally, and the matching `deallocate(p, 0)` must not fail. The block comes from the 16-byte bin, but the request adds 0 to `live_bytes()`.
+- The destructor returns every chunk to the upstream.
+- `live_bytes()`: the total, over all requests not yet returned, of **the bytes the callers asked for** (not the block sizes).
+
+A `PERF` test allocates a million 32-byte blocks and then frees them all; this must take less than one second, so allocation must not slow down as the number of live blocks grows.
+
+## Stage 4 — Measurement
+
+No new interface. Within the same executable, a `PERF` test runs a workload of small objects of mixed sizes through your allocator and through `::operator new/delete`; yours must be more than 2 times faster (Release only).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. How large a gap between Stage 3's `live_bytes()` and the bytes the upstream handed out counts as "waste"? What is the upper bound on internal fragmentation? Are power-of-two bins the best choice?
+2. Lecture 11's analysis says that binned free lists may use O(M log M) virtual memory. Why? How does that relate to external fragmentation?
+3. Why is C++14's sized deallocation a plus for this kind of allocator? If a caller passes the wrong size, when and in what form does it go wrong?

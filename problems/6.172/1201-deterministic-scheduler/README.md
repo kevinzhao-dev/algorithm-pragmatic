@@ -1,7 +1,7 @@
 ---
-title: 確定性排程器（把競態變成可重現的 bug）
-unit: 12 · Deterministic Execution（HW9）
-source: 6.172 Lecture 16 Determinism；HW9 §4 replay 概念；Recitation 9 第 4 題
+title: Deterministic Scheduler (turning races into reproducible bugs)
+unit: 12 · Deterministic Execution (HW9)
+source: 6.172 Lecture 16 Determinism; HW9 §4 replay concept; Recitation 9 Problem 4
 pdf: materials/6.172/lectures/lec16.pdf
 answer: materials/6.172/recitations/r9/solutions.pdf
 read: materials/6.172/recitations/r9/problems.pdf
@@ -9,43 +9,123 @@ kind: code
 minutes: 130
 ---
 
-# 1201 · 確定性排程器
+# 1201 · Deterministic Scheduler
 
-> **實務上為什麼會遇到**：race condition 最痛苦的地方是不能重現。Folly 的 `DeterministicSchedule`、Rust 的 `loom`、Windows 的 CHESS 都是同一個想法：讓所有執行緒輪流跑，由一個 scheduler 決定誰下一個，於是 interleaving 變成一串可以記錄、重播、窮舉的決定。
+**Based on:** [Nondeterministic Parallel Programming](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/e4fe97d2a250b57bb1e330fba8cf5992_MIT6_172F18_lec16.pdf) · **Read first:** [R9: Deterministic Execution Problems](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/edc0cd9509aecd107836c3fbd90bc86c_MIT6_172F18_rec9.pdf)
 
-這題自己做一個最小版本。之後 1211 以下的並行題都會用同樣的技巧（用 `_shared/08_dsched.hpp` 裡的完整版）來讓測試完全確定性。
+> **Why this comes up in practice:** the most painful thing about a race condition is that you can't reproduce it. Folly's `DeterministicSchedule`, Rust's `loom`, and CHESS on Windows all rest on the same idea: let the threads take turns, with a scheduler deciding who runs next, so that an interleaving becomes a sequence of decisions you can record, replay, and enumerate.
 
-> ⚠️ **爆雷警告**：`_shared/08_dsched.hpp` 是這題的完整版解答，做完之前不要打開。
+## Original problem
 
-**模型**：每個 body 跑在自己的 `std::thread`，但任一時刻只有一個在跑。body 裡呼叫 `yield_point()` 時交出控制權。**決策點**有兩種：開始時選第一個 thread，以及每次 `yield_point()`、thread 結束或阻塞時，只要還有**兩個以上**可以跑的 thread，就要做一次決定。`schedule` 記下每個決策選了誰。不是決策點時（只剩一個可跑）就不記。
+6.172 Recitation 9 Problem 4 is a multiple-choice question about two cores of a dual-core x86 processor, named Albert and Bernard. They run at the same time and share two volatile variables, x and y, which both start at 0:
 
-## Stage 1 — 指定 schedule
+- Albert checks whether x is 0 and, if it is, sets y to x + 1.
+- Bernard does the mirror image: if y is 0, he sets x to y + 1.
 
-`run_schedule(bodies, choices)`：依序用 `choices` 的 id 做決策；用完之後每次選最小的 id。`choices` 指到不能跑的 thread 時丟 `std::invalid_argument`。回傳 `RunOutcome`。
+Once both cores have finished, which final values of x and y are possible? Pick every option that can occur:
 
-body 內 throw 的例外要在 `run_schedule` 回到呼叫者時原樣重丟（`PRACTICE_TODO` 就是例外）。
+- (A) x = 0, y = 1
+- (B) x = 0, y = 2
+- (C) x = 1, y = 1
+- (D) x = 1, y = 2
+- (E) x = 2, y = 2
 
-## Stage 2 — 隨機與重播
+The exercise also draws on two other parts of the course:
 
-- `run_random(bodies, seed)`：每個決策在可跑的 thread 中均勻亂選（`std::mt19937_64`，同一個 seed 必須得到相同的 `schedule`）。
-- `replay_schedule(bodies, schedule)`：照著記錄重跑一次，結果必須完全相同。
+- Lecture 16 calls a program deterministic on an input when every execution writes the same sequence of values to each memory location (different locations may still be updated in different orders). Its advice is to avoid nondeterministic parallel code, and where you can't, to plan a test strategy: switch the nondeterminism off, wrap it behind an interface, replace it with a deterministic version, or use analysis tools.
+- HW9 §4 (replay debugging) has you record a run under gdb and step backward through it (reverse-next, reverse-continue, and watchpoints) to track down a bug in the homework's hash table.
 
-這就是作業 Replay debugging 的重點：一旦 failure 可以被重播，就可以慢慢查。
+## Your task
 
-## Stage 3 — 阻塞與死鎖偵測
+In this exercise you build a minimal version of such a scheduler yourself. The concurrent exercises from 1211 onward use the same technique (with the full version in `_shared/08_dsched.hpp`) to make their tests fully deterministic.
 
-`SchedMutex`：`lock()` 時鎖若是空的就直接拿走（這不是決策點）；鎖被別人拿著時把呼叫者標成**阻塞**（不算可跑），控制權交給其他 thread，鎖放開時喚醒等它的 thread（重新競爭）。`unlock()` 放開鎖之後是一個決策點。`try_lock()` 立刻回傳，拿不到就是 `false`。
+> ⚠️ **Spoiler warning:** `_shared/08_dsched.hpp` is the full solution to this exercise. Do not open it until you are done.
 
-如果沒有任何 thread 可以跑、卻還有 thread 沒結束，就是**死鎖**：`RunOutcome::deadlocked = true`，所有 thread 都要結束（用內部例外把阻塞的 thread 收掉，不可以 hang 住）。
+**Model:** each body runs on its own `std::thread`, but only one of them runs at any moment. A body hands over control when it calls `yield_point()`. There are two kinds of **decision points**: choosing the first thread at the start, and every `yield_point()`, thread exit, or block; each time, as long as **two or more** threads can still run, a decision must be made. `schedule` records which thread each decision picked. When it isn't a decision point (only one thread can run), nothing is recorded.
 
-## Stage 4 — 窮舉所有 interleaving
+Instead of reasoning about Recitation 9 Problem 4 by hand, you build the machinery that runs every interleaving of such code, and the Stage 4 tests use it to list that problem's possible outcomes.
 
-`explore_all(make)`：`make()` 每次回傳新的 `Scenario{bodies, check}`。對**每一種**可能的 schedule 都跑一次（DFS 枚舉決策樹），統計 `ExploreSummary{runs, failures, deadlocks, bad_schedule}`：`check` 回傳 `false` 算一次 failure，第一次失敗的 schedule 要記在 `bad_schedule`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-兩個 body、各兩段（中間一個 yield），應該恰好有 C(4,2) = 6 種 schedule；測試也會窮舉 Recitation 9 第 4 題的所有可能結果。
+## Stage 1 — A prescribed schedule
 
-## 面試追問
+```cpp
+struct RunOutcome {
+    std::vector<int> schedule;  // id of the thread chosen at every point with a real choice
+    bool deadlocked = false;
+};
 
-1. 這個模型假設 sequential consistency。Recitation 9 第 4 題在 x86 上結果一樣嗎？什麼情況下 weak memory 會多出新結果？
-2. 窮舉的 schedule 數量會以多快的速度成長？CHESS 的 preemption bounding 為什麼有用？
-3. Lecture 16 說「決定性」程式比較好除錯。Recitation 9 第 3 題為什麼是 false：「每個並行存取都用同一個 mutex 保護，序列時有決定性的程式就仍有決定性」？
+RunOutcome run_schedule(std::vector<std::function<void()>> bodies,
+                        const std::vector<int>& choices);
+void yield_point();
+```
+
+`run_schedule(bodies, choices)`: make the decisions with the ids in `choices`, in order; once they run out, always pick the smallest id. If `choices` names a thread that cannot run, throw `std::invalid_argument`. Return a `RunOutcome`.
+
+An exception thrown inside a body must be rethrown unchanged when `run_schedule` returns to its caller (`PRACTICE_TODO` is one such exception).
+
+## Stage 2 — Random runs and replay
+
+```cpp
+RunOutcome run_random(std::vector<std::function<void()>> bodies, std::uint64_t seed);
+RunOutcome replay_schedule(std::vector<std::function<void()>> bodies,
+                           const std::vector<int>& schedule);
+```
+
+- `run_random(bodies, seed)`: at each decision, pick uniformly at random among the runnable threads (`std::mt19937_64`; the same seed must give the same `schedule`).
+- `replay_schedule(bodies, schedule)`: run again by following the record; the result must be exactly the same.
+
+This is the point of the homework's replay debugging: once a failure can be replayed, you can investigate it at your own pace.
+
+## Stage 3 — Blocking and deadlock detection
+
+```cpp
+class SchedMutex {
+public:
+    SchedMutex();
+    SchedMutex(const SchedMutex&) = delete;
+    SchedMutex& operator=(const SchedMutex&) = delete;
+
+    void lock();
+    bool try_lock();
+    void unlock();
+};
+```
+
+`SchedMutex`: in `lock()`, if the lock is free, take it right away (this is not a decision point); if someone else holds it, mark the caller **blocked** (not runnable) and hand control to another thread, and when the lock is released, wake the threads waiting for it (they compete for it again). After `unlock()` releases the lock, there is a decision point. `try_lock()` returns immediately, with `false` if it can't get the lock.
+
+If no thread can run but some thread hasn't finished, that is a **deadlock**: set `RunOutcome::deadlocked = true`, and every thread must still finish (use an internal exception to clean up the blocked threads; the run must not hang).
+
+## Stage 4 — Enumerating every interleaving
+
+```cpp
+struct Scenario {
+    std::vector<std::function<void()>> bodies;
+    std::function<bool()> check;
+};
+
+struct ExploreSummary {
+    long runs = 0;
+    long failures = 0;
+    long deadlocks = 0;
+    std::vector<int> bad_schedule;  // the first failing schedule, for replay
+};
+
+ExploreSummary explore_all(const std::function<Scenario()>& make);
+```
+
+`explore_all(make)`: each call to `make()` returns a fresh `Scenario{bodies, check}`. Run once for **every** possible schedule (enumerate the decision tree with DFS), and tally the results in an `ExploreSummary{runs, failures, deadlocks, bad_schedule}`: each time `check` returns `false` counts as one failure, and the first failing schedule must be stored in `bad_schedule`.
+
+Two bodies of two segments each (with one yield in between) should give exactly C(4,2) = 6 schedules; the tests also enumerate every possible outcome of Recitation 9 Problem 4.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. This model assumes sequential consistency. Does Recitation 9 Problem 4 give the same results on x86? When would weak memory add new outcomes?
+2. How fast does the number of schedules to enumerate grow? Why does CHESS's preemption bounding help?
+3. Lecture 16 says "deterministic" programs are easier to debug. Why is Recitation 9 Problem 3 false: "if every concurrent access is protected by the same mutex, a program that is deterministic when run serially stays deterministic"?
+
+---
+
+**Official solution:** [R9 Solutions](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/c6c9289ff27bb530da2bf81dd96b8627_MIT6_172F18_rec9sol.pdf). Read it after you finish.

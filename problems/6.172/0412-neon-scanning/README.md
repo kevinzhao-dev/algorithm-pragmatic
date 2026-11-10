@@ -1,47 +1,88 @@
 ---
-title: NEON 手寫掃描（AVX2 換成 NEON）
-unit: 04 · Vectorization（HW3）
-source: 6.172 HW3（§3.1.3 Vector flavors，AVX2 轉 NEON）
+title: Hand-Written NEON Scanning (NEON in place of AVX2)
+unit: 04 · Vectorization (HW3)
+source: 6.172 HW3 (§3.1.3 Vector flavors, AVX2 to NEON)
 pdf: materials/6.172/homework/hw03/handout.pdf
 read: materials/6.172/homework/hw03/handout.pdf
 kind: perf
 minutes: 120
 ---
 
-# 0412 · NEON 手寫掃描
+# 0412 · Hand-Written NEON Scanning
 
-> **實務上為什麼會遇到**：`memchr`、JSON／CSV parser、字串比對的內層迴圈有 early exit，編譯器的自動向量化幫不上忙，正是 simdjson 這類函式庫要手寫 SIMD 的原因。Apple Silicon 上的工具是 NEON，它和 AVX2 最大的差別是：**沒有 `movemask`**。
+**Original problem:** [HW3: Vectorization](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/072651a8229a63376d5720c9a500ae45_MIT6_172F18hw3.pdf) · **Read first:** [HW3: Vectorization](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/072651a8229a63376d5720c9a500ae45_MIT6_172F18hw3.pdf)
 
-這題用 `<arm_neon.h>` 的 intrinsics（`vld1q_u8`、`vceqq_u8`、`vdupq_n_u8`、`vandq_u8`…）。每一題的共同規則：
+> **Why this comes up in practice:** the inner loops of `memchr`, JSON/CSV parsers, and string matching have early exits, so the compiler's auto-vectorization can't help, which is exactly why libraries like simdjson hand-write their SIMD. On Apple Silicon the tool is NEON, and its biggest difference from AVX2 is that it **has no `movemask`**.
 
-- **不可讀出 buffer 之外**：剩下不到 16 byte 的尾巴要用純量處理。測試用剛好大小的配置跑 ASan，多讀一個 byte 就會被抓。
-- 比起同一支執行檔裡的純量迴圈（`#pragma clang loop vectorize(disable)`）要有明顯加速（下面每關有倍數）。
-- 找不到時回傳 `npos`（定義為 `haystack.size()`）。
+## Original problem
+
+6.172 HW3 §3.1.3 ("Flavors of vector arithmetic") starts from the fact that the vector unit is built in hardware, so every kind of vector operation (subtract, multiply, and so on) needs hardware of its own. It reuses the data-parallel loop from §3.1, which combines two `uint32_t` arrays elementwise into a third, and swaps the operator through the `__OP__` macro to see which operators still vectorize.
+
+- **Write-up 8:** try different operators in the loop (fix, however you like, the division-by-zero errors caused by array `B` starting out all zeros). Do any of them fail to vectorize with `VECTORIZE=1 AVX2=1`? Study the assembly for `<<` built with only `VECTORIZE=1`, and explain how it differs from the AVX2 version.
+
+The original is C compiled by Clang for x86, with and without AVX2.
+
+## Your task
+
+This exercise uses the intrinsics from `<arm_neon.h>` (`vld1q_u8`, `vceqq_u8`, `vdupq_n_u8`, `vandq_u8`, …). Rules shared by every stage:
+
+- **Never read outside the buffer:** handle a tail of fewer than 16 bytes with scalar code. The tests run under ASan with exactly-sized allocations, so reading even one byte too many gets caught.
+- You must get a clear speedup over a scalar loop in the same executable (`#pragma clang loop vectorize(disable)`); each stage below gives the factor.
+- When nothing is found, return `npos` (defined as `haystack.size()`).
+
+Where the original asks which operations the compiler can vectorize for x86, here you write the vector code by hand with NEON intrinsics, for scanning loops with early exits that the compiler won't vectorize, and you work around NEON's missing `movemask`.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — `find_byte(haystack, needle)`
 
-回傳第一個等於 `needle` 的索引。比純量快至少 **4 倍**（長且沒有符合項的 buffer）。
+```cpp
+[[gnu::noinline]] inline std::size_t find_byte(std::span<const std::uint8_t> haystack,
+                                               std::uint8_t needle);
+```
 
-沒有 `movemask` 怎麼辦？用 `vshrn_n_u16(vreinterpretq_u16_u8(eq), 4)` 把 16 個 mask byte 壓成 64 位元（每個 byte 對應 4 位元），然後算 trailing zeros 除以 4。
+Return the index of the first byte equal to `needle`. At least **4×** faster than scalar (on a long buffer with no match).
+
+What do you do without `movemask`? Use `vshrn_n_u16(vreinterpretq_u16_u8(eq), 4)` to squeeze the 16 mask bytes into 64 bits (4 bits per byte), then count the trailing zeros and divide by 4.
 
 ## Stage 2 — `count_byte(haystack, needle)`
 
-回傳出現次數，比純量快至少 **4 倍**。每個 lane 的比較結果是 `0x00` 或 `0xFF`。
+```cpp
+[[gnu::noinline]] inline std::size_t count_byte(std::span<const std::uint8_t> haystack,
+                                                std::uint8_t needle);
+```
+
+Return the number of occurrences, at least **4×** faster than scalar. Each lane's comparison result is `0x00` or `0xFF`.
 
 ## Stage 3 — `to_lower_ascii(text)`
 
-只把 `'A'..'Z'` 轉小寫，其他 byte（含 `>= 0x80` 的非 ASCII）一律不變。比純量快至少 **4 倍**。沒有 branch：用 mask 加上 `0x20`。
+```cpp
+[[gnu::noinline]] inline void to_lower_ascii(std::span<char> text);
+```
+
+Convert only `'A'..'Z'` to lowercase, and leave every other byte unchanged (including non-ASCII bytes `>= 0x80`). At least **4×** faster than scalar. No branches: add `0x20` through a mask.
 
 ## Stage 4 — `find_any_of3(haystack, a, b, c)`
 
-第一個等於 `a`、`b` 或 `c` 的索引，比純量快至少 **3 倍**。
+```cpp
+[[gnu::noinline]] inline std::size_t find_any_of3(std::span<const std::uint8_t> haystack,
+                                                  std::uint8_t a, std::uint8_t b, std::uint8_t c);
+```
 
-## Stage 5 — 實務延伸：CSV 欄位切割
+The index of the first byte equal to `a`, `b`, or `c`, at least **3×** faster than scalar.
 
-`split_fields(std::string_view line, char sep)`：回傳每個欄位的 `std::string_view`（空欄位也要算；`""` 切成一個空欄位；沒有 quote 處理）。用前面的 `find_byte`。
+## Stage 5 — Real-world extension: Splitting CSV fields
 
-## 面試追問
+```cpp
+std::vector<std::string_view> split_fields(std::string_view line, char separator);
+```
 
-1. 為什麼有 early exit 的迴圈編譯器不敢向量化？（提示：讀到第 `i` 個 byte 才知道要不要繼續，讀過頭可能跨到不該讀的 page）
-2. AVX2 的 `_mm256_movemask_epi8` 在 NEON 上為什麼這麼麻煩？`vshrn` 法有什麼代價？
-3. 256-bit AVX2 一次看 32 byte，NEON 只有 16，為什麼 Apple Silicon 的 `memchr` 還是這麼快？（提示：解碼寬度與快取）
+`split_fields(std::string_view line, char separator)`: return a `std::string_view` for each field, pointing into `line` rather than into a copy (empty fields count too; `""` splits into one empty field; there is no quote handling). Use your `find_byte` from earlier.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why won't the compiler vectorize a loop with an early exit? (Hint: you only know whether to continue after reading byte `i`, and reading past it may cross into a page you shouldn't touch.)
+2. Why is AVX2's `_mm256_movemask_epi8` such a pain on NEON? What does the `vshrn` trick cost?
+3. 256-bit AVX2 looks at 32 bytes at a time and NEON at only 16, so why is `memchr` on Apple Silicon still so fast? (Hint: decode width and caches.)

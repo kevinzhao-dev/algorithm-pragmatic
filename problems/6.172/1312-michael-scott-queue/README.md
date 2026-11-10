@@ -1,7 +1,7 @@
 ---
 title: Michael-Scott Lock-Free Queue
-unit: 13 · Data Synchronization（HW10）
-source: 6.172 HW10 check-off 3、4、5、6、9（lock-free queue）
+unit: 13 · Data Synchronization (HW10)
+source: 6.172 HW10 check-off 3, 4, 5, 6, 9 (lock-free queue)
 pdf: materials/6.172/homework/hw10/handout.pdf
 read: materials/6.172/lectures/lec17.pdf
 kind: code
@@ -11,38 +11,70 @@ sanitizer: tsan
 
 # 1312 · Michael-Scott Lock-Free Queue
 
-> **實務上為什麼會遇到**：JDK 的 `ConcurrentLinkedQueue` 就是這個演算法。它有一個很值得記住的技巧：tail 可以暫時落後，但其他 thread 看到落後時會**幫忙**把它推到正確的位置，這就是 lock-free 的意思：沒有任何一個 thread 能卡住大家。
+**Original problem:** [HW10: Data Synchronization](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/64f4db5020ca72ab205e458d40bbdfe3_MIT6_172F18hw10.pdf) · **Read first:** [Synchronization Without Locks](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/fc3b846f6e13e15e4982a92369ca3825_MIT6_172F18_lec17.pdf)
 
-把作業 Figure 2、3 的演算法寫成 C++。節點由 `_shared/08_node_pool.hpp` 的 `practice::NodePool` 提供，同樣用**索引加版本計數**放進一個 `Atomic<std::uint64_t>`（低 32 位索引、高 32 位計數）：`head`、`tail`、每個節點的 `next` 都是這種 tagged word。作業的 `pointer_t` 就是這個東西。
+> **Why this comes up in practice:** the JDK's `ConcurrentLinkedQueue` is this algorithm. It has a trick well worth remembering: tail may lag behind for a while, but any other thread that notices the lag **helps** push it to the right place. That is what lock-free means: no single thread can hold everyone else up.
 
-值是 `std::uint64_t`，存在節點的 `Atomic<std::uint64_t>`（作業第 5(b) 題提到 dequeue 在 CAS **之前**就讀了值，當時節點可能已被別人回收重用，所以值必須是 atomic）。`MsQueue<Atomic>(capacity)`：`capacity` 個元素外加一個 dummy。
+## Original problem
 
-## Stage 1 — 序列語意
+6.172 HW10 (Data Synchronization) is a written homework that compares two FIFO queues given as C-like pseudocode; this exercise covers the lock-free one, Michael and Scott's queue (Figures 2 and 3). As in the lock-based queue (restated in 1311), nodes come from a pool allocated in advance, and the first node is a dummy that is never dequeued and only marks an empty queue. Here every link (head, tail, and each node's next) is a `pointer_t`: a node pointer paired with a modification count. CAS atomically replaces the contents of an address with a new value if they still equal an expected old value, and reports whether it did; every CAS in the queue also increments the count. Stage 2 below walks through the enqueue and dequeue steps. The handout asks you to assume that CAS works on a whole `pointer_t`, that the compiler doesn't reorder instructions, that the pool never runs out, and that nodes don't cross cache lines, so every write is atomic.
 
-- `enqueue(value)`：節點用完時回傳 `false`。
-- `dequeue()`：空的回傳 `std::nullopt`。
+- Check-off 3: annotate every line of the lock-free code with a brief comment of at most 10 words, in the style of the comments on the lock-based code.
+- Check-off 4: explain how a new node gets inserted. How many successful CASes does each node need? What happens if the final CAS, the one that swings tail to the new node, fails? How far can tail lag behind? Is the program correct without that CAS?
+- Check-off 5, about dequeue:
+  - (a) After reading head, tail, and head's next, dequeue checks that head hasn't changed. Why is that check needed?
+  - (b) The value is read from the next node before the CAS that moves head. Why does that order matter, and what can happen if the two are swapped?
+  - (c) What happens if that CAS on head fails?
+- Check-off 6: which implementation do you expect to run faster, the lock-based one or the lock-free one? Justify it by weighing what the synchronization primitives cost, how much contention there is, and the overhead of synchronizing.
+- Check-off 9: explain how the count deals with the ABA problem discussed in recitation.
 
-新節點的 `next` 要重設成空，但**保留並增加**舊的版本計數（節點會重複使用）。
+## Your task
 
-## Stage 2 — 併發與 helping（check-off 3、4、5）
+Write the algorithm from the homework's Figures 2 and 3 in C++. The nodes come from `practice::NodePool` in `_shared/08_node_pool.hpp`, and again an **index plus a version counter** is packed into one `Atomic<std::uint64_t>` (the low 32 bits hold the index, the high 32 bits the counter): `head`, `tail`, and every node's `next` are all tagged words of this kind. The homework's `pointer_t` is exactly this.
 
-寫出作業的完整流程：
+Values are `std::uint64_t`, stored in the node's `Atomic<std::uint64_t>` (the homework's check-off 5(b) points out that dequeue reads the value **before** the CAS, when someone else may already have recycled and reused the node, so the value must be atomic). `MsQueue<Atomic>(capacity)`: `capacity` elements plus one dummy.
 
-- `enqueue`：讀 tail 和 `tail->next`，確認 tail 沒變。`next` 為空就 CAS `tail->next` 接上新節點；否則 tail 落後了，CAS 幫它往前移。成功接上之後，再 CAS 把 tail 移到新節點。
-- `dequeue`：讀 head、tail、`head->next`，確認 head 沒變。head 和 tail 相同時：`next` 為空代表空 queue，回傳 `std::nullopt`；否則 tail 落後了，幫忙移動。不同時：**先**讀值，再 CAS head 到 `next`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-因為有 helping，一個 thread 卡在「接上節點、還沒移 tail」時，其他 thread 不會被擋住。測試窮舉這種情形：不可以死鎖、不可以無限重試。
+## Stage 1 — Sequential semantics
 
-## Stage 3 — ABA（check-off 9）
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class MsQueue {
+public:
+    explicit MsQueue(std::size_t capacity);
 
-版本計數的作用：節點被回收重用之後，索引可能跟舊值一樣，但版本不同，所以舊的 CAS 會失敗。測試會窮舉一個 stale `dequeue` 的情境：另一個 thread 在中間把 head 繞回同一個索引。
+    bool enqueue(std::uint64_t value);
+    std::optional<std::uint64_t> dequeue();
+};
+```
 
-## Stage 4 — 真的跑
+- `enqueue(value)`: return `false` when the nodes run out.
+- `dequeue()`: return `std::nullopt` when the queue is empty.
 
-多個 producer 和 consumer：不可以遺失、重複；同一個 producer 的值順序不變。全程要通過 TSan。
+A new node's `next` must be reset to empty, but **keep and increment** its old version counter (nodes get reused).
 
-## 面試追問
+## Stage 2 — Concurrency and helping (check-off 3, 4, 5)
 
-1. check-off 4：為什麼 enqueue 需要兩次 CAS？第二次 CAS 失敗（或 thread 在那之前被殺掉）會發生什麼事？tail 最多能落後多少？
-2. check-off 5：為什麼 dequeue 要在 CAS 之前讀值？這個順序反過來會怎樣？
-3. check-off 6：lock-free 版本一定比雙鎖快嗎？用 CAS 重試、cache-line 爭奪和競爭程度解釋。
+Write out the homework's complete procedure:
+
+- `enqueue`: read tail and `tail->next`, and confirm that tail hasn't changed. If `next` is empty, CAS `tail->next` to link in the new node; otherwise tail is lagging, so CAS it forward to help. Once the node is linked, CAS tail over to the new node.
+- `dequeue`: read head, tail, and `head->next`, and confirm that head hasn't changed. If head and tail are the same: an empty `next` means the queue is empty, so return `std::nullopt`; otherwise tail is lagging, so help move it. If they differ: read the value **first**, then CAS head to `next`.
+
+Because of helping, a thread stuck at "node linked, tail not yet moved" doesn't block the other threads. The tests enumerate this situation: there must be no deadlock and no endless retrying.
+
+## Stage 3 — ABA (check-off 9)
+
+What the version counter does: after a node is recycled and reused, its index may equal an old value, but the version differs, so a stale CAS fails. The tests enumerate a stale `dequeue` scenario in which another thread cycles head back around to the same index in the meantime.
+
+## Stage 4 — Running it for real
+
+Several producers and consumers: nothing may be lost or duplicated, and each producer's values stay in order. Everything must pass TSan.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Check-off 4: why does enqueue need two CASes? What happens if the second CAS fails (or the thread is killed before it)? How far can tail lag behind at most?
+2. Check-off 5: why does dequeue read the value before the CAS? What happens if you reverse the order?
+3. Check-off 6: is the lock-free version always faster than the two-lock one? Explain in terms of CAS retries, cache-line contention, and how heavy the contention is.

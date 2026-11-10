@@ -1,6 +1,6 @@
 ---
-title: Min Queue（攤銷 O(1) 取最小值的 FIFO）
-unit: 04 · Amortization 與 Randomization（PS4）
+title: Min Queue (a FIFO with an amortized O(1) minimum)
+unit: 04 · Amortization and Randomization (PS4)
 source: 6.046J PS4 Problem 4-1
 pdf: materials/6.046j/psets/ps04/questions.pdf
 answer: materials/6.046j/psets/ps04/solutions.pdf
@@ -11,43 +11,91 @@ minutes: 75
 
 # 0411 · Min Queue
 
-> **實務上為什麼會遇到**：要回報「過去一分鐘的最高延遲」時，每次掃整個視窗太貴，heap 的刪除也麻煩。這個資料結構的攤銷論證短到可以在白板上講完，正是面試愛考的類型。
+**Original problem:** [Problem Set 4](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/5eb7c1134350c89889dcaf7ec3fd609a_MIT6_046JS15_pset4.pdf) · **Read first:** [Amortization: Amortized Analysis](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/13e2c7d165259712327af0af312a068e_MIT6_046JS15_lec05.pdf)
 
-做一個 FIFO 佇列，額外支援查詢目前元素的最小值，每個操作**攤銷 O(1)**。
+> **Why this comes up in practice:** to report "the highest latency in the past minute", scanning the whole window every time is too expensive, and deleting from a heap is awkward. The amortized argument for this data structure is short enough to finish on a whiteboard, which is exactly the kind of thing interviews love.
 
-## Stage 1 — 基本操作
+## Original problem
 
-`MinQueue<T, Compare>`，預設 `Compare = std::less<T>`：
+6.046J PS4 Problem 4-1 ("Extreme FIFO Queues") asks for a data structure that holds a first-in, first-out queue of integers and supports ENQUEUE, DEQUEUE, and FIND-MIN in O(1) amortized time each, so that any sequence of m operations costs O(m) in total. You may assume that every item ever enqueued is distinct.
 
-| 操作 | 行為 |
+- (a) Describe the data structure along with explicit invariants that capture what it guarantees. Hint: pair an ordinary queue with one or more helper structures that do the bookkeeping.
+- (b) Describe the ENQUEUE, DEQUEUE, and FIND-MIN procedures precisely, in prose or pseudocode.
+- (c) Prove that the operations return correct answers, for example by deriving correctness from your invariants and sketching why the invariants are maintained.
+- (d) Give the worst-case cost of a single operation and the amortized cost over m operations.
+
+## Your task
+
+Build a FIFO queue that can also report the minimum of its current elements, with every operation in **O(1) amortized** time.
+
+Parts (a), (b), and (d) become code whose answers and comparison counts the tests check, and the correctness argument of part (c) moves to the interview follow-ups. Unlike the original, the element type and the ordering are generic, elements need not be distinct, and Stage 3 uses the queue to track a peak over a time window.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Basic operations
+
+```cpp
+template <typename T, typename Compare = std::less<T>>
+class MinQueue {
+public:
+    explicit MinQueue(Compare compare = Compare{});
+
+    std::size_t size() const;
+    bool empty() const;
+    void enqueue(T value);
+    T dequeue();
+    const T& front() const;
+    const T& find_min() const;
+};
+```
+
+`MinQueue<T, Compare>`, where `Compare = std::less<T>` by default:
+
+| Operation | Behavior |
 | --- | --- |
-| `enqueue(value)` | 放到佇列尾端 |
-| `dequeue()` | 取出並回傳佇列開頭 |
-| `front()` | 回傳佇列開頭 |
-| `find_min()` | 回傳目前的最小值（依 `Compare` 判斷） |
-| `size()`、`empty()` | 目前元素數 |
+| `enqueue(value)` | Add to the back of the queue |
+| `dequeue()` | Remove and return the front of the queue |
+| `front()` | Return the front of the queue |
+| `find_min()` | Return the current minimum (as decided by `Compare`) |
+| `size()`, `empty()` | The current number of elements |
 
-佇列為空時 `dequeue`、`front`、`find_min` 丟 `std::out_of_range`。
+When the queue is empty, `dequeue`, `front`, and `find_min` throw `std::out_of_range`. Copying a queue copies its full state, and the copy is independent of the original afterwards.
 
-**原題假設元素互不相同，這裡不假設**。最容易寫錯的是刪除時用值來判斷要不要從輔助結構移除：兩個相同的值不是同一個元素。
+**The original problem assumes the elements are distinct; this exercise doesn't.** The most common mistake is deciding by value, on a dequeue, whether to remove something from the auxiliary structure: two equal values are not the same element.
 
-## Stage 2 — 攤銷成本與泛型
+## Stage 2 — Amortized cost and generality
 
-- 任意 `m` 個操作，總比較次數不超過 `3m`。測試用 `Counted` 量，其中包含一次把整段都淘汰掉的 worst case。
-- `Compare` 可以有狀態（lambda 捕捉外部變數）。
-- `T` 可以是 **move-only**（例如內含 `unique_ptr`）：輔助結構不能保存 `T` 的副本。
+- Comparisons are amortized O(1), and the tests count them with `Counted`: a random mix of `m` enqueues and dequeues, with a `find_min` after each step, may make at most `3m` comparisons in total. A run of `n` decreasing enqueues followed by `n` dequeues may make at most `3n`, and the worst case, `n` increasing enqueues followed by one smaller value that evicts the entire run at once, at most `3(n + 1)`.
+- `Compare` may have state (a lambda that captures outside variables).
+- `T` may be **move-only** (for example, it may hold a `unique_ptr`): the auxiliary structure must not keep copies of `T`.
 
-## Stage 3 — 實務延伸：視窗內的高峰值
+## Stage 3 — Real-world extension: the peak within a window
 
-`PeakTracker(window)`：`window ≥ 1`，否則丟 `std::invalid_argument`。內部用 `MinQueue<int64, std::greater<>>`。
+```cpp
+class PeakTracker {
+public:
+    explicit PeakTracker(std::int64_t window);
 
-- `record(timestamp, value)`：記錄一筆資料。
-- `peak(now)`：回傳時間落在 `(now - window, now]` 內的最大值，沒有資料時回傳 `std::nullopt`。
+    void record(std::int64_t timestamp, std::int64_t value);
+    std::optional<std::int64_t> peak(std::int64_t now);
+};
+```
 
-時間只能往前走，`record` 和 `peak` 的時間參數合起來必須非遞減，否則丟 `std::invalid_argument`。同一時間可以有多筆資料。
+`PeakTracker(window)`: `window ≥ 1`; otherwise throw `std::invalid_argument`. Use a `MinQueue<int64, std::greater<>>` internally.
 
-## 面試追問
+- `record(timestamp, value)`: record one data point.
+- `peak(now)`: return the largest value whose time falls in `(now - window, now]`, or `std::nullopt` if there is no such data.
 
-1. 用 potential method 證明攤銷 O(1)：`Φ` 怎麼定？單一 `enqueue` 的 worst case 是多少？
-2. 不變量是什麼？為什麼輔助結構一定是遞增的？（原題要求的正確性論證，在這裡用口頭講清楚。）
-3. 如果要求**最壞情況** O(1)，或要支援非交換的聚合（例如字串串接），兩個 stack 的做法要怎麼改？
+Time only moves forward: the time arguments of `record` and `peak`, taken together, must be non-decreasing; otherwise throw `std::invalid_argument`. Several data points may share the same time.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Prove the O(1) amortized bound with the potential method: how do you define `Φ`? What is the worst case of a single `enqueue`?
+2. What is the invariant? Why is the auxiliary structure always increasing? (This is the correctness argument the original problem asks for; explain it out loud here.)
+3. If you need O(1) in the **worst case**, or must support a non-commutative aggregate (such as string concatenation), how do you change the two-stack approach?
+
+---
+
+**Official solution:** [Solutions to Problem Set 4](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/8cc8292f1b04e9adc43546295b2ecae3_MIT6_046JS15_pset4sols.pdf). Read it after you finish.

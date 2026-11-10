@@ -1,6 +1,6 @@
 ---
-title: LCS 與最小 diff（Hirschberg）
-unit: 07 · Dynamic Programming I（PS7）
+title: LCS and Minimal Diff (Hirschberg)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 Lecture 16
 pdf: materials/6.006/lectures/lec16.pdf
 read: materials/6.006/lectures/lec16.pdf
@@ -8,35 +8,60 @@ kind: code
 minutes: 110
 ---
 
-# 0702 · LCS 與最小 diff
+# 0702 · LCS and Minimal Diff
 
-> **實務上為什麼會遇到**：`git diff`、three-way merge、DNA sequence alignment 都是 longest common subsequence 的親戚：兩份序列，保留共同的部分，其餘的就是改動。檔案一大，二維表的記憶體會比時間先把你擋下來。
+**Based on:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf) · **Read first:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf)
 
-最長共同子序列：`a` 和 `b` 共同的子序列中最長的一個（不必連續，順序要相同）。
+> **Why this comes up in practice:** `git diff`, three-way merge, and DNA sequence alignment are all relatives of the longest common subsequence: take two sequences, keep what they share, and everything else is a change. Once the files get large, the memory for the 2D table stops you before the running time does.
 
-一律寫成函式樣板，接受任何 `std::ranges::random_access_range`，元素只需要 `operator==`。
+## Your task
 
-一次只看一關，做完再往下讀。
+The longest common subsequence is the longest of the subsequences that `a` and `b` have in common (its elements need not be contiguous, but they must appear in the same order).
 
-## Stage 1 — 長度
+Write every function as a function template that accepts any `std::ranges::random_access_range` whose elements need only `operator==`.
 
-`std::size_t lcs_length(const A& a, const B& b)`，O(|a||b|) 時間，每對元素最多比較常數次。
+Lecture 16 solves LCS with a 2D table and parent pointers. Here you go further: you cut the memory down to linear, first for the length and then for the alignment itself (Hirschberg's method), and finish with a line-level diff.
 
-## Stage 2 — 還原一組解
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`Alignment lcs_alignment(const A& a, const B& b)`：`Alignment` 是 `std::vector<std::pair<size_t, size_t>>`，每個 pair `(i, j)` 表示 `a[i]` 和 `b[j]` 配對。`i` 和 `j` 都要嚴格遞增，長度等於 LCS。同長度的解有很多，任一組都可以。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 3 — 把 `lcs_length` 的記憶體降到 O(min(|a|, |b|))
+## Stage 1 — Length
 
-只求長度時，relation 只看前一列，而且可以挑較短的序列當欄。額外配置要在 `O(min(|a|, |b|))` 以內（測試量 heap 高水位）。Stage 2 的 `lcs_alignment` 不用改。
+```cpp
+template <std::ranges::random_access_range A, std::ranges::random_access_range B>
+std::size_t lcs_length(const A& a, const B& b);
+```
 
-## Stage 4 — 線性記憶體還原解（Hirschberg）
+`std::size_t lcs_length(const A& a, const B& b)`, in O(|a||b|) time, comparing each pair of elements at most a constant number of times (the tests count element comparisons and allow at most 2·|a|·|b|).
 
-二維 parent pointer 在 10⁵ × 10⁵ 時放不下。實作 `Alignment lcs_alignment_linear(const A& a, const B& b)`：時間仍是 O(|a||b|)，heap 高水位 O(|a| + |b|)。
+## Stage 2 — Recovering one solution
 
-作法的關鍵：只用 Stage 3 的滾動列，正著跑前半段的 `a`、反著跑後半段的 `a`，就能算出最佳解在中線穿過 `b` 的哪個位置。切成兩塊之後各自遞迴，兩塊的工作量加起來只有原本的一半。
+```cpp
+using Alignment = std::vector<std::pair<std::size_t, std::size_t>>;
 
-## Stage 5 — 實務延伸：行級 diff
+template <std::ranges::random_access_range A, std::ranges::random_access_range B>
+Alignment lcs_alignment(const A& a, const B& b);
+```
+
+`Alignment lcs_alignment(const A& a, const B& b)`: `Alignment` is `std::vector<std::pair<size_t, size_t>>`, and each pair `(i, j)` means that `a[i]` is matched with `b[j]`. Both `i` and `j` must be strictly increasing, and the length must equal the LCS length. Many solutions have the same length; any one of them is fine.
+
+## Stage 3 — Cut the memory of `lcs_length` to O(min(|a|, |b|))
+
+When you only need the length, the relation looks only at the previous row, and you can pick the shorter sequence for the columns. Extra allocation must stay within `O(min(|a|, |b|))` (the tests measure the heap high-water mark in both argument orders: at most 64 bytes per element of the shorter sequence, and at most 8 KiB when it has only 16 elements). `lcs_alignment` from Stage 2 doesn't need to change.
+
+## Stage 4 — Recovering a solution in linear memory (Hirschberg)
+
+```cpp
+template <std::ranges::random_access_range A, std::ranges::random_access_range B>
+Alignment lcs_alignment_linear(const A& a, const B& b);
+```
+
+At 10⁵ × 10⁵, a 2D table of parent pointers doesn't fit in memory. Implement `Alignment lcs_alignment_linear(const A& a, const B& b)`: the time is still O(|a||b|), and the heap high-water mark is O(|a| + |b|) (the tests allow at most 72·(|a| + |b|) bytes).
+
+The key idea: using only the rolling rows from Stage 3, run forward over the first half of `a` and backward over the second half of `a`, and you can work out where an optimal solution crosses the midline in `b`. Once that splits the problem into two pieces, recurse on each; together the two pieces take only half the original work.
+
+## Stage 5 — Real-world extension: line-level diff
 
 ```cpp
 enum class DiffKind { Keep, Remove, Add };
@@ -46,13 +71,15 @@ std::vector<DiffLine> diff_lines(std::span<const std::string> before,
                                  std::span<const std::string> after);
 ```
 
-- 把 `Keep` 和 `Remove` 依序取出，要等於 `before`；把 `Keep` 和 `Add` 依序取出，要等於 `after`。
-- `Keep` 的行數要等於 LCS 長度，也就是最小 diff。
-- 兩個 `Keep` 之間，同一段改動裡所有 `Remove` 都排在 `Add` 前面（一般 diff 的慣例）。
-- `text` 指向傳入的字串，呼叫端要讓它們活得比結果久。
+- Taking the `Keep` and `Remove` lines in order must give `before`; taking the `Keep` and `Add` lines in order must give `after`.
+- The number of `Keep` lines must equal the LCS length, which makes the diff minimal.
+- Between two `Keep` lines, every `Remove` of that change comes before its `Add` lines (the usual diff convention).
+- `text` points into the strings passed in, and the caller must keep those strings alive longer than the result.
 
-## 面試追問
+## Interview follow-ups
 
-1. Stage 4 為什麼時間只是常數倍？把每一層遞迴的工作量加起來給面試官看。
-2. Stage 3 的滾動為什麼讓 Stage 2 的還原做不到？還有哪些 DP 能用同樣的「中線」手法？
-3. `git diff` 實際用的 Myers 演算法複雜度是 O((n+m)D)。什麼輸入下它比 LCS 表快得多？什麼時候沒差？
+Once you're done, answer without looking at your code:
+
+1. Why does Stage 4 cost only a constant factor more time? Add up the work at each level of the recursion for the interviewer.
+2. Why does the rolling in Stage 3 make the recovery from Stage 2 impossible? Which other DPs can use the same "midline" trick?
+3. The Myers algorithm that `git diff` actually uses runs in O((n+m)D). On what inputs is it much faster than the LCS table? When does it make no difference?

@@ -1,6 +1,6 @@
 ---
-title: DFS、拓撲排序與環偵測
-unit: 05 · Graph Search（PS5）
+title: DFS, Topological Sort, and Cycle Detection
+unit: 05 · Graph Search (PS5)
 source: 6.006 Lecture 10, Recitation 10
 pdf: materials/6.006/lectures/lec10.pdf
 read: materials/6.006/recitations/rec10.pdf
@@ -8,49 +8,106 @@ kind: code
 minutes: 100
 ---
 
-# 0502 · DFS、拓撲排序與環偵測
+# 0502 · DFS, Topological Sort, and Cycle Detection
 
-> **實務上為什麼會遇到**：build system、資料管線、migration 順序，全都要先排出拓撲順序；排不出來時，錯誤訊息還得說清楚是哪幾個東西繞成一圈。
+**Based on:** [Lecture 10: Depth-First Search notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/f3e349e0eb3288592289d2c81e0c4f4d_MIT6_006S20_lec10.pdf) · **Read first:** [Recitation 10 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/d9265b3b33d238ff914b0223ac8e7628_MIT6_006S20_r10.pdf)
 
-圖用 `AdjacencyList`（`std::vector<std::vector<int>>`）表示，`g[u]` 是 `u` 的 outgoing neighbors，頂點編號 `0 … n-1`。一次只看一關，做完再往下讀。
+> **Why this comes up in practice:** build systems, data pipelines, and migration ordering all need a topological order first. When there isn't one, the error message also has to spell out exactly which items form the loop.
 
-**全部不可以遞迴**：圖可以是百萬個頂點的一條長鏈。起點不存在時丟 `std::out_of_range`。
+## Your task
+
+A graph is an `AdjacencyList` (`std::vector<std::vector<int>>`): `g[u]` holds the outgoing neighbors of `u`, and vertices are numbered `0 … n-1`.
+
+**Nothing may be recursive:** a graph can be a single long chain of a million vertices. Throw `std::out_of_range` when the source vertex doesn't exist.
+
+You build an iterative DFS that matches the recursive one exactly, use it for full traversals and connected components, then for a topological sort that produces a cycle when there is no order, and finally for incremental rebuilds in a build system.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
 
 ## Stage 1 — DFS
 
-`dfs(g, s)` 回傳 `DfsForest{parent, finish_order}`：
+```cpp
+using AdjacencyList = std::vector<std::vector<int>>;
 
-- 依 `g[u]` 的順序走鄰居，第一次碰到的頂點就往下走。**結果要和教科書的遞迴版完全相同**。
-- `parent[v]` 是發現 `v` 的頂點；`s` 和沒走到的頂點是 `kNoParent`。
-- `finish_order` 是 `s` 可達的頂點，依「visit 結束」的先後排列。
+inline constexpr int kNoParent = -1;
 
-O(V + E)。
+struct DfsForest {
+    std::vector<int> parent;
+    std::vector<int> finish_order;
+};
 
-## Stage 2 — Full-DFS 與連通元件
+DfsForest dfs(const AdjacencyList& g, int source);
+```
 
-- `full_dfs(g)`：把所有頂點走完，每個還沒走到的頂點依編號由小到大當新的 root，root 的 `parent` 是 `kNoParent`。
-- `connected_components(g)`：`g` 是 undirected（`v` 在 `g[u]` 裡則 `u` 也在 `g[v]` 裡）。回傳每個頂點的元件編號，編號依元件中最小頂點出現的先後從 0 開始。
+`dfs(g, s)` returns `DfsForest{parent, finish_order}`:
 
-## Stage 3 — 拓撲排序，或交出環
+- Try neighbors in the order of `g[u]`, and go down into a vertex the first time you reach it. **The result must be identical to the textbook recursive version.**
+- `parent[v]` is the vertex that discovered `v`. It is `kNoParent` for `s` and for vertices the search never reaches.
+- `finish_order` holds the vertices reachable from `s`, in the order their visits finish.
 
-`topological_sort(g)` 回傳 `std::variant<TopologicalOrder, DirectedCycle>`：
+O(V + E).
 
-- 沒有環：`TopologicalOrder.vertices` 是所有頂點的一個排列，每條邊的 tail 都排在 head 前面。
-- 有環：`DirectedCycle.vertices` 是一個**簡單**環，`vertices[i] → vertices[i+1]` 都是圖上的邊，最後一個頂點接回第一個。self-loop 是長度為 1 的環。
+## Stage 2 — Full-DFS and connected components
 
-O(V + E)。
+```cpp
+DfsForest full_dfs(const AdjacencyList& g);
+std::vector<int> connected_components(const AdjacencyList& g);
+```
 
-## Stage 4 — 實務延伸：增量 build
+- `full_dfs(g)`: visit every vertex. Each vertex not reached yet becomes a new root, in increasing order of ID, and a root's `parent` is `kNoParent`.
+- `connected_components(g)`: `g` is undirected (if `v` is in `g[u]`, then `u` is in `g[v]`). Return each vertex's component number. Numbers start at 0 and follow the order in which the smallest vertex of each component appears.
 
-做一個 `BuildGraph`，`edges` 裡的 `{a, b}` 表示 `a` 要先於 `b` 建置：
+## Stage 3 — Topological sort, or produce a cycle
 
-- `BuildGraph(targets, edges)`：邊有環時丟 `CycleError`，它的 `cycle()` 回傳一個同 Stage 3 格式的環；`edges` 裡有不存在的 target 時丟 `std::out_of_range`。
-- `rebuild_order(changed)`：`changed` 裡的 target 改了之後，要重建的就是它們加上它們所有的下游。回傳這些 target 的一個合法建置順序，每個只出現一次。`changed` 可以有重複，也可以是空的；有不存在的 target 時丟 `std::out_of_range`。
+```cpp
+struct TopologicalOrder {
+    std::vector<int> vertices;
+};
 
-專案有兩百萬個 target，開發者一天改幾百次檔案：**每次查詢的成本只能跟受影響的子圖成正比**，不能每次都掃過整張圖。
+struct DirectedCycle {
+    std::vector<int> vertices;
+};
 
-## 面試追問
+std::variant<TopologicalOrder, DirectedCycle> topological_sort(const AdjacencyList& g);
+```
 
-1. 為什麼反向的 finishing order 是拓撲順序？證明要分哪兩個 case？
-2. Undirected graph 的 DFS 為什麼不會出現 forward edge 和 cross edge？
-3. 跟 Kahn's algorithm（反覆拿掉 in-degree 為 0 的頂點）比，DFS 版有什麼好處、壞處？如果 `rebuild_order` 要讓多個執行緒同時呼叫，你用來記錄 visited 的東西要放在哪裡？
+`topological_sort(g)` returns `std::variant<TopologicalOrder, DirectedCycle>`:
+
+- No cycle: `TopologicalOrder.vertices` is a permutation of all the vertices in which the tail of every edge comes before its head.
+- A cycle: `DirectedCycle.vertices` is a **simple** cycle. Every `vertices[i] → vertices[i+1]` is an edge of the graph, and the last vertex connects back to the first. A self-loop is a cycle of length 1.
+
+O(V + E).
+
+## Stage 4 — Real-world extension: incremental builds
+
+```cpp
+class CycleError : public std::runtime_error {
+public:
+    explicit CycleError(std::vector<int> cycle);         // provided
+    const std::vector<int>& cycle() const noexcept;      // provided
+};
+
+class BuildGraph {
+public:
+    BuildGraph(int targets, std::span<const std::pair<int, int>> edges);
+
+    std::vector<int> rebuild_order(std::span<const int> changed);
+};
+```
+
+Build a `BuildGraph`, where an entry `{a, b}` in `edges` means `a` must be built before `b`:
+
+- `BuildGraph(targets, edges)`: throw `CycleError` if the edges contain a cycle; its `cycle()` returns a cycle in the same format as Stage 3. Throw `std::out_of_range` if `edges` mentions a target that doesn't exist.
+- `rebuild_order(changed)`: once the targets in `changed` have changed, the ones to rebuild are those targets plus everything downstream of them. Return a valid build order of these targets, with each one appearing exactly once. `changed` may contain duplicates and may be empty; throw `std::out_of_range` if it contains a target that doesn't exist.
+
+The project has two million targets, and developers change files hundreds of times a day: **the cost of each query may only be proportional to the affected subgraph**. It must not scan the whole graph every time.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the reverse finishing order a topological order? Which two cases does the proof split into?
+2. Why does DFS on an undirected graph never produce forward edges or cross edges?
+3. Compared with Kahn's algorithm (repeatedly removing a vertex with in-degree 0), what are the pros and cons of the DFS version? If several threads must be able to call `rebuild_order` at the same time, where should the structure that records visited vertices live?

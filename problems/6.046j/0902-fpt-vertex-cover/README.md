@@ -1,6 +1,6 @@
 ---
-title: FPT：Vertex Cover 的 Bounded Search 與 Kernel
-unit: 09 · Approximation 與 FPT（PS9）
+title: FPT for Vertex Cover (bounded search and kernels)
+unit: 09 · Approximation and FPT (PS9)
 source: 6.046J Lecture 18
 pdf: materials/6.046j/lectures/lec18.pdf
 read: materials/6.046j/lectures/lec18.pdf
@@ -8,19 +8,33 @@ kind: code
 minutes: 120
 ---
 
-# 0902 · FPT：Vertex Cover
+# 0902 · FPT: Vertex Cover
 
-> **實務上為什麼會遇到**：資料去重、conflict-graph 的修復，通常 k 很小但 n 上千萬。把指數部分隔離到參數 k，就能在 n 很大的時候精確求解——`2^k · n` 跟 `n^k` 是完全不同的世界。
+**Based on:** [Complexity: Fixed-parameter Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/2cf0d5a0689efafd2bf2d13954d8ad9b_MIT6_046JS15_lec18.pdf) · **Read first:** [Complexity: Fixed-parameter Algorithms](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/2cf0d5a0689efafd2bf2d13954d8ad9b_MIT6_046JS15_lec18.pdf)
 
-無向圖 `edges`，頂點 `0..n-1`，**可能有重複邊**（輸入保證無 self-loop）。
+> **Why this comes up in practice:** data deduplication and conflict-graph repair usually have a small k but an n in the tens of millions. Confining the exponential part to the parameter k lets you solve exactly even when n is huge: `2^k · n` and `n^k` are completely different worlds.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — Bounded Search Tree
+The graph is undirected, given as `edges` on vertices `0..n-1`, and it **may have duplicate edges** (the input is guaranteed to have no self-loops).
 
-`std::optional<std::vector<int>> vc_search(int n, std::span<const std::pair<int,int>> edges, int k)`：若存在大小 ≤ `k` 的 vertex cover，回傳一個（頂點不重複，順序不限）；否則回傳 `std::nullopt`。時間 O(2^k·(V+E))，深度不可超過 k。
+You build the FPT algorithms for vertex cover from Lecture 18: a bounded search tree, a kernel, the two combined, and finally a minimum cover.
 
-講義的做法：挑一條還沒被覆蓋的邊 `(u,v)`，分別試 `u` 在 cover 裡、`v` 在 cover 裡。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time.
+
+## Stage 1 — Bounded search tree
+
+```cpp
+using EdgeList = std::span<const std::pair<int, int>>;
+
+std::optional<std::vector<int>> vc_search(int n, EdgeList edges, int k);
+```
+
+`std::optional<std::vector<int>> vc_search(int n, std::span<const std::pair<int,int>> edges, int k)`: if a vertex cover of size ≤ `k` exists, return one (no repeated vertices, in any order); otherwise return `std::nullopt`. O(2^k·(V+E)) time, and the search depth must not exceed k.
+
+The lecture notes' approach: pick an edge `(u,v)` that isn't covered yet, and try `u` in the cover and `v` in the cover as two separate branches.
 
 ## Stage 2 — Kernelization
 
@@ -36,18 +50,28 @@ struct Kernel {
 Kernel kernelize(int n, std::span<const std::pair<int,int>> edges, int k);
 ```
 
-規則（重複套用）：刪除重複邊；度數 `> k` 的頂點必定在 cover 裡，加入 `forced`、刪除、`k-1`（`k` 為負 ⇒ `no_instance`）。之後若邊數 `> k²` ⇒ `no_instance`；否則刪除孤立點，並把剩下的頂點重新編號。需滿足：`n ≤ 2k²`、邊數 ≤ `k²`。
+Rules (apply repeatedly): delete duplicate edges. A vertex of degree `> k` must be in the cover, so add it to `forced`, delete it, and set `k` to `k-1` (`k` going negative ⇒ `no_instance`). Afterwards, if the number of edges is `> k²` ⇒ `no_instance`; otherwise delete isolated vertices and renumber the remaining ones in increasing order of their original ids (so `to_original` is increasing). `(u, v)` and `(v, u)` count as the same edge. The result must satisfy `n ≤ 2k²` and have at most `k²` edges.
 
-## Stage 3 — Kernel + 搜尋
+## Stage 3 — Kernel plus search
 
-`std::optional<std::vector<int>> vc_fpt(int n, edges, int k)`：先 kernelize 再 bounded search，總時間 O(V + E + 2^k·k²)。回傳原始編號的 cover，大小 ≤ k。
+```cpp
+std::optional<std::vector<int>> vc_fpt(int n, EdgeList edges, int k);
+```
 
-## Stage 4 — 實務延伸：最小 cover
+`std::optional<std::vector<int>> vc_fpt(int n, edges, int k)`: kernelize first, then run the bounded search, in O(V + E + 2^k·k²) total. Return a cover in the original vertex ids, of size ≤ k.
 
-`std::vector<int> min_vertex_cover(int n, edges)`：回傳一個最小 vertex cover。k 從 lower bound 往上試（iterative deepening），OPT 很小時整體依然很快。
+## Stage 4 — Real-world extension: a minimum cover
 
-## 面試追問
+```cpp
+std::vector<int> min_vertex_cover(int n, EdgeList edges);
+```
 
-1. 為什麼 `f(k)·n^{O(1)}` 算好、`n^{f(k)}` 不算？Kernelization 的定義和 FPT 為什麼等價？
-2. 「度數 > k 的頂點必選」這條規則的正確性是什麼？為什麼邊數 > k² 就可以直接拒絕？
-3. 這題的 `2^k` 能改進到 `1.47^k` 嗎？（對度數 ≥ 3 的頂點分岔）
+`std::vector<int> min_vertex_cover(int n, edges)`: return a minimum vertex cover. Try k upward from a lower bound (iterative deepening), so the whole thing stays fast when OPT is small.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does `f(k)·n^{O(1)}` count as good while `n^{f(k)}` doesn't? Why is having a kernelization equivalent to being FPT?
+2. Why is the rule "a vertex of degree > k must be chosen" correct? Why can you reject right away when there are more than k² edges?
+3. Can this exercise's `2^k` be improved to `1.47^k`? (Branch on vertices of degree ≥ 3.)

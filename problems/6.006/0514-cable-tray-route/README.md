@@ -1,6 +1,6 @@
 ---
-title: 機房走線（沿著磁磚邊界的最短路徑）
-unit: 05 · Graph Search（PS5）
+title: Cable Tray Routing (shortest path along tile boundaries)
+unit: 05 · Graph Search (PS5)
 source: 6.006 PS5 Problem 5-4
 pdf: materials/6.006/psets/ps5/questions.pdf
 answer: materials/6.006/psets/ps5/solutions.pdf
@@ -9,42 +9,79 @@ kind: code
 minutes: 70
 ---
 
-# 0514 · 機房走線
+# 0514 · Cable Tray Routing
 
-> **實務上為什麼會遇到**：PCB 佈線、機房纜線、地圖上的管線規劃，走的常常是「格線」而不是「格子」。題目真正要練的是：先想清楚圖的頂點和邊是什麼，再動手。
+**Original problem:** [Problem Set 5 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/8c155b28c87cc1fe3f506de2036bdf1b_MIT6_006S20_ps5_questions.pdf) · **Read first:** [Lecture 9: Breadth-First Search notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/196a95604877d326c6586e60477b59d4_MIT6_006S20_lec9.pdf), [Recitation 9 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6afd7e9a85d7d36e204533569f9fccf6_MIT6_006S20_r09.pdf)
 
-機房地板是 `n × n` 的磁磚格，`tiles[row][col]` 是這一格的擁有者：
+> **Why this comes up in practice:** PCB routing, data center cabling, and pipe planning on a map often run along the grid lines rather than through the cells. What this exercise really trains is working out what the graph's vertices and edges are before you start coding.
 
-| 值 | 意義 |
+## Original problem
+
+6.006 PS5 Problem 5-4 is about an old map, recorded on clay tablets, of an n × n grid of squares. Each square is either river, labeled `'euphris'` or `'tigrates'` for the two rivers, or farmland marked with its owner's name. Merchants once linked the rivers with a trade route that follows grid lines: it starts at a corner of some `'euphris'` square and ends at a corner of some `'tigrates'` square. The route never runs along a grid line that separates two plots of the same farmer, and among all routes with that property it is the shortest; assume the shortest one is unique.
+
+Describe how to recover the route from the map in O(n²) time.
+
+## Your task
+
+The data center floor is an `n × n` grid of tiles, and `tiles[row][col]` is the owner of a tile:
+
+| Value | Meaning |
 | --- | --- |
-| `kZoneA` (-1) | 甲區機房 |
-| `kZoneB` (-2) | 乙區機房 |
-| `>= 0` | 某個租戶的編號 |
+| `kZoneA` (-1) | Zone A server room |
+| `kZoneB` (-2) | Zone B server room |
+| `>= 0` | A tenant's ID |
 
-線槽沿著磁磚的**邊界**走。交點用 `Corner{r, c}` 表示，`0 ≤ r, c ≤ n`；磁磚 `(row, col)` 的四個角是 `(row, col)`、`(row+1, col)`、`(row, col+1)`、`(row+1, col+1)`。一段線槽連接兩個相鄰的交點，它的兩側是：
+Cable trays run along the **boundaries** of the tiles. An intersection is written `Corner{r, c}`, with `0 ≤ r, c ≤ n`; the four corners of tile `(row, col)` are `(row, col)`, `(row+1, col)`, `(row, col+1)`, and `(row+1, col+1)`. A tray segment joins two adjacent intersections, and its two sides are:
 
-- 水平段 `(r, c)–(r, c+1)`：上方磁磚 `(r-1, c)`、下方磁磚 `(r, c)`。
-- 垂直段 `(r, c)–(r+1, c)`：左方磁磚 `(r, c-1)`、右方磁磚 `(r, c)`。
+- Horizontal segment `(r, c)–(r, c+1)`: the tile above is `(r-1, c)` and the tile below is `(r, c)`.
+- Vertical segment `(r, c)–(r+1, c)`: the tile on the left is `(r, c-1)` and the tile on the right is `(r, c)`.
 
-規則：
+Rules:
 
-- 一段線槽兩側的磁磚如果屬於**同一個租戶**，這段就不能用（會穿過人家的機櫃區）。
-- 地板最外圈的線段只有一側有磁磚，一定能用。甲、乙區的磁磚不算租戶，不會限制任何線段。
+- If the tiles on both sides of a segment belong to the **same tenant**, the segment can't be used (it would cut through someone else's rack area).
+- A segment on the outer edge of the floor has a tile on only one side, so it can always be used. Zone A and Zone B tiles don't count as tenants and never restrict a segment.
 
-路線的起點必須是某一格甲區磁磚的角，終點必須是某一格乙區磁磚的角，段數要最少。`n` 最大到幾千，一次只看一關，做完再往下讀。
+A route must start at a corner of some Zone A tile and end at a corner of some Zone B tile, using as few segments as possible. `n` goes up to several thousand.
 
-## Stage 1 — 最短長度
+This is the original problem with the rivers as Zone A and Zone B and the farmers as tenants. Stage 1 asks only for the length and Stage 2 for the route itself, and since the shortest route isn't assumed to be unique, any shortest route is accepted.
 
-`shortest_tray_length(tiles)`：回傳最少段數。起點和終點可以是同一個交點（長度 0）。連不通，或地圖裡沒有甲區／乙區，回傳 `std::nullopt`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-要 O(n²)。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 路線本身
+## Stage 1 — Shortest length
 
-`shortest_tray_route(tiles)`：回傳一條最短路線上的交點序列（含兩端，長度 0 時只有一個交點），不存在則回傳 `std::nullopt`。最短路線可能不只一條，回傳任一條都算對。
+```cpp
+inline constexpr int kZoneA = -1;
+inline constexpr int kZoneB = -2;
 
-## 面試追問
+using TileMap = std::vector<std::vector<int>>;
 
-1. 為什麼不能把磁磚當成頂點？如果線槽改成穿過磁磚中央，圖要怎麼換？
-2. 為什麼不需要對每個起點各跑一次 BFS？用一句話說明你的做法等價於什麼樣的圖。
-3. 如果每一段線槽的成本不同，或者某些線段會被臨時封閉，你的做法哪裡要改？
+std::optional<int> shortest_tray_length(const TileMap& tiles);
+```
+
+`shortest_tray_length(tiles)`: return the fewest segments. The start and the end may be the same intersection (length 0). Return `std::nullopt` if they can't be connected, or if the map has no Zone A or no Zone B.
+
+Must run in O(n²).
+
+## Stage 2 — The route itself
+
+```cpp
+using Corner = std::pair<int, int>;  // (r, c)
+
+std::optional<std::vector<Corner>> shortest_tray_route(const TileMap& tiles);
+```
+
+`shortest_tray_route(tiles)`: return the sequence of intersections along a shortest route (both ends included, so a single intersection when the length is 0), or `std::nullopt` if there is no route. There may be more than one shortest route, and returning any of them is correct.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why can't you use the tiles as vertices? If the trays ran through the centers of the tiles instead, how would the graph change?
+2. Why don't you need to run a separate BFS from every start? In one sentence, say what kind of graph your approach is equivalent to.
+3. If every tray segment had its own cost, or some segments could be closed temporarily, what in your approach would have to change?
+
+---
+
+**Official solution:** [Problem Set 5 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/23d4cf5421c77bb55b3735f7e8f70dfe_MIT6_006S20_ps5_solutions.pdf). Read it after you finish.

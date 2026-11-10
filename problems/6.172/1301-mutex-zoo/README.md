@@ -1,7 +1,7 @@
 ---
-title: 從 Atomic 做出 Mutex（TTAS、競爭式、Peterson）
-unit: 13 · Data Synchronization（HW10）
-source: 6.172 Lecture 16 Properties of Mutexes；Lecture 17 Peterson's Algorithm、Mutex Using CAS
+title: Building Mutexes from Atomics (TTAS, competitive, and Peterson)
+unit: 13 · Data Synchronization (HW10)
+source: 6.172 Lecture 16 Properties of Mutexes; Lecture 17 Peterson's Algorithm, Mutex Using CAS
 pdf: materials/6.172/lectures/lec17.pdf
 read: materials/6.172/lectures/lec16.pdf
 kind: code
@@ -9,36 +9,82 @@ minutes: 80
 sanitizer: tsan
 ---
 
-# 1301 · 從 Atomic 做出 Mutex
+# 1301 · Building Mutexes from Atomics
 
-> **實務上為什麼會遇到**：大多數時候直接用 `std::mutex`，但要看懂 spinlock 為什麼在高競爭下崩潰、為什麼 futex 要先 spin 一下才睡，就得自己做過一次。Peterson 則是理解 memory ordering 最小的例子：只靠 load 和 store 就能互斥，前提是 sequential consistency。
+**Based on:** [Synchronization Without Locks](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/fc3b846f6e13e15e4982a92369ca3825_MIT6_172F18_lec17.pdf) · **Read first:** [Nondeterministic Parallel Programming](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/e4fe97d2a250b57bb1e330fba8cf5992_MIT6_172F18_lec16.pdf)
 
-所有共享欄位用模板參數 `Atomic` 宣告（預設 `std::atomic`）。測試用 `_shared/08_dsched.hpp` 的 `dsched::Atomic` 隨機探索排程，也用真的 `std::atomic` 加一個**非 atomic 的計數器**跑 TSan：你的鎖如果沒有建立 happens-before，TSan 就會報 data race。所以 memory order 不能全部寫 relaxed。
+> **Why this comes up in practice:** most of the time you just use `std::mutex`, but to understand why a spinlock collapses under heavy contention, and why a futex spins for a while before it sleeps, you have to build one yourself at least once. Peterson's algorithm is the smallest example for understanding memory ordering: loads and stores alone are enough for mutual exclusion, provided memory is sequentially consistent.
+
+## Your task
+
+Declare every shared field with the template parameter `Atomic` (default `std::atomic`). The tests use `dsched::Atomic` from `_shared/08_dsched.hpp` to explore schedules at random, and they also run TSan with a real `std::atomic` plus a **non-atomic counter**: if your lock doesn't establish happens-before, TSan reports a data race. So you can't make every memory order relaxed.
+
+You build three locks out of atomics alone: a test-and-test-and-set spinlock, the competitive spin-then-yield mutex from Lecture 16, and Peterson's two-thread lock from Lecture 17.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Test-and-Test-and-Set
 
-`TtasLock<Atomic>`：
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class TtasLock {
+public:
+    TtasLock();
 
-- `lock()`：先用 load 等到鎖看起來是空的，才嘗試 exchange 搶鎖（比一直 exchange 少很多 cache-line 爭奪）。
-- `try_lock()`：試一次，成功回傳 `true`。
-- `unlock()`：放開。
+    void lock();
+    bool try_lock();
+    void unlock();
+};
+```
 
-## Stage 2 — 競爭式 mutex（spin 再 yield）
+`TtasLock<Atomic>`:
 
-`CompetitiveLock<Atomic>(spin_limit, yield)`：`yield` 是 `std::function<void()>`，預設是 `std::this_thread::yield`。
+- `lock()`: first wait with loads until the lock looks free, and only then try to grab it with an exchange (this causes far less cache-line contention than exchanging over and over).
+- `try_lock()`: try once; return `true` on success.
+- `unlock()`: release the lock.
 
-`lock()`：鎖可用時直接拿走，不呼叫 `yield`。拿不到時，連續失敗 `spin_limit` 次之後呼叫一次 `yield()`，然後重新開始這一輪計數。`spin_limit == 0` 代表第一次失敗就 yield。
+## Stage 2 — Competitive mutex (spin, then yield)
 
-Lecture 16 的分析：spin 的時間只要大致等於一次 context switch，總成本最多是最佳策略的 2 倍。
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class CompetitiveLock {
+public:
+    explicit CompetitiveLock(int spin_limit,
+                             std::function<void()> yield = [] { std::this_thread::yield(); });
+
+    void lock();
+    bool try_lock();
+    void unlock();
+};
+```
+
+`CompetitiveLock<Atomic>(spin_limit, yield)`: `yield` is a `std::function<void()>` and defaults to `std::this_thread::yield`.
+
+`lock()`: when the lock is available, take it right away without calling `yield`. When you can't get it, call `yield()` once after `spin_limit` consecutive failures, then start a new round of counting. `spin_limit == 0` means yielding on the first failure.
+
+Lecture 16's analysis: as long as you spin for about as long as one context switch takes, the total cost is at most 2 times that of the optimal strategy.
 
 ## Stage 3 — Peterson's algorithm
 
-`PetersonLock<Atomic>`：只支援兩個執行緒，`lock(self)` / `unlock(self)`（`self` 是 0 或 1）。照 Lecture 17：想進入時先舉旗表示自己想要，再把優先權讓給對方，對方也想要而且輪到對方時才等待。
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class PetersonLock {
+public:
+    PetersonLock();
 
-只用 load 和 store，不可以用 exchange 或 CAS。memory order 全部用 `seq_cst`。
+    void lock(int self);
+    void unlock(int self);
+};
+```
 
-## 面試追問
+`PetersonLock<Atomic>`: supports only two threads, through `lock(self)` / `unlock(self)` (`self` is 0 or 1). Follow Lecture 17: to enter, first raise your flag to show that you want in, then give priority to the other thread, and wait only while the other thread also wants in and it is the other thread's turn.
 
-1. 為什麼 Peterson 在 x86 上如果不用 fence 會壞？哪個重排（TSO 唯一允許的那種）造成的？（Lecture 17）
-2. 比較 test-and-set 和 test-and-test-and-set 在 16 個 core 競爭時的 cache-coherence 流量。
-3. 為什麼實務上幾乎沒有人用 Peterson？它需要什麼硬體保證、擴展到 n 個執行緒要付什麼代價？Recitation 9 第 5、6 題的 memory fence 敘述各是對是錯？
+Use only loads and stores; you must not use exchange or CAS. Use `seq_cst` for every memory order.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does Peterson's algorithm break on x86 without a fence? Which reordering (the only kind that TSO allows) causes it? (Lecture 17)
+2. Compare the cache-coherence traffic of test-and-set and test-and-test-and-set when 16 cores contend for the lock.
+3. Why does almost nobody use Peterson's algorithm in practice? What hardware guarantees does it need, and what does extending it to n threads cost? Are the memory-fence statements in Recitation 9 Problems 5 and 6 each true or false?

@@ -1,6 +1,6 @@
 ---
-title: AVL Tree 引擎（rotation 與 subtree augmentation）
-unit: 04 · Trees & Heaps（PS4）
+title: AVL Tree Engine (rotations and subtree augmentation)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 Lecture 7, Recitation 7
 pdf: materials/6.006/recitations/rec07.pdf
 read: materials/6.006/lectures/lec07.pdf
@@ -8,60 +8,153 @@ kind: code
 minutes: 150
 ---
 
-# 0402 · AVL Tree 引擎
+# 0402 · AVL Tree Engine
 
-> **實務上為什麼會遇到**：每個 balanced tree（AVL、Red-Black）的核心都只有「旋轉 + 從葉往根修復」。學會這個之後，order statistics、線段查詢這些需求都只是「多維護一個 subtree 的摘要」而已，這種 augmentation 是資料結構題最常見的加分招式。
+**Based on:** [Recitation 7 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/16d43dec3488717057d7daff2bac3400_MIT6_006S20_r07.pdf) · **Read first:** [Lecture 7: Binary Trees, Part 2: AVL notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf)
 
-把 0401 的 `BinaryTree` 複製過來，一路加上高度、旋轉和平衡。下兩題的 Set 和 Sequence 都建立在這個引擎上，後面的題目也會重用它，所以介面請照規格。
+> **Why this comes up in practice:** the core of every balanced tree (AVL, Red-Black) is nothing more than rotations plus repairs from a leaf up to the root. Once you've learned that, requirements like order statistics and range queries come down to maintaining one more summary per subtree, and this kind of augmentation is the most common way to score bonus points on data structure questions.
 
-一次只看一關。
+## Your task
 
-## Stage 1 — 節點帶高度與大小
+Copy over the `BinaryTree` from 0401, then add heights, rotations, and balancing along the way. The Set and Sequence of the next two exercises are both built on this engine, and later exercises reuse it too, so please follow the specified interface.
 
-介面和 0401 相同（`root`、`size`、`empty`、`begin`/`end`、`subtree_first/last`、`successor/predecessor`、`insert_before/after`、`erase`），`insert_before/after` 的 `nullptr` anchor 語意也相同。但 `Node` 多了兩個欄位，**每次操作之後對每個節點都要正確**：
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `height`：leaf 是 0，空子樹視為 -1。
-- `size`：這棵子樹的節點數。
+Read one stage at a time.
 
-`erase` 同樣只能讓被刪的節點失效，不可 swap item。這一關還不用平衡。
-
-## Stage 2 — Rotation
-
-`rotate_left(x)`（要求 `x` 有右子節點）/ `rotate_right(x)`（要求有左子節點）：O(1)，回傳取代 `x` 位置的節點，`traversal order` 不變，兩個被搬動節點的 `height`、`size`（以及 Stage 4 的 `aug`）要重算。祖先由呼叫者負責，這一步不需要更新。
-
-## Stage 3 — 維持平衡
-
-每個節點都要 height-balanced：左右子樹高度差最多 1（skew ∈ {-1, 0, 1}）。
-
-每次 `insert_before/after` 或 `erase` 之後，從變動的最低點往根走，用一兩次旋轉修復（lecture 的 case 1/2 單旋，case 3 雙旋），並沿路更新 `height`、`size`。`Node*` 必須在旋轉後繼續有效。
-
-- 所有操作 O(log n)。
-- 依序插入 `n` 個元素，高度必須 ≤ `1.45 lg(n + 2)`。
-
-## Stage 4 — Subtree Augmentation
-
-第二個模板參數 `Aug` 描述要在每個子樹上維護的摘要：
+## Stage 1 — Nodes with heights and sizes
 
 ```cpp
-struct SumAug {
-    using Value = long long;                   // 每個節點存一份
-    static Value identity() { return 0; }      // 空子樹
-    static Value of(const T& item);            // 單一 item 的摘要
-    static Value combine(const Value& a, const Value& b);  // 不一定交換：a 在 traversal order 上較前
+template <typename T, typename Aug = NoAugment>
+class AvlTree {
+public:
+    struct Node {
+        explicit Node(T value) : item(std::move(value)), aug(Aug::of(item)) {}
+        T item;
+        Node* parent = nullptr;
+        Node* left = nullptr;
+        Node* right = nullptr;
+        int height = 0;          // leaf: 0, empty subtree counts as -1
+        std::size_t size = 1;    // number of nodes in this subtree
+        typename Aug::Value aug;
+    };
+
+    class iterator {
+    public:
+        using iterator_concept = std::forward_iterator_tag;
+        using iterator_category = std::forward_iterator_tag;
+        using value_type = T;
+        using difference_type = std::ptrdiff_t;
+        using pointer = T*;
+        using reference = T&;
+
+        iterator() = default;
+        reference operator*() const;
+        pointer operator->() const;
+        iterator& operator++();
+        iterator operator++(int);
+        friend bool operator==(const iterator&, const iterator&);
+    };
+
+    AvlTree() = default;
+    ~AvlTree();  // release every node
+
+    AvlTree(const AvlTree&) = delete;
+    AvlTree& operator=(const AvlTree&) = delete;
+
+    Node* root() const;
+    std::size_t size() const;
+    bool empty() const;
+    iterator begin() const;
+    iterator end() const;
+
+    static Node* subtree_first(Node* node);
+    static Node* subtree_last(Node* node);
+    static Node* successor(Node* node);
+    static Node* predecessor(Node* node);
+
+    Node* insert_before(Node* anchor, T value);
+    Node* insert_after(Node* anchor, T value);
+    T erase(Node* node);
 };
 ```
 
-- 對每個節點：`node->aug == combine(combine(aug(left), of(item)), aug(right))`，左右缺席時用 `identity()`。**`combine` 不保證交換律**（字串串接、矩陣相乘），順序寫錯就過不了。
-- 每次 `insert`/`erase`/`rotate` 都維持這個不變量，而且只能呼叫 O(log n) 次 `combine`，不可以整棵重算。
-- `refresh(node)`：呼叫者直接改了 `node->item` 之後，把 `node` 到根路徑上的 `aug` 重算（O(log n)，高度、大小不變）。
+The interface is the same as in 0401 (`root`, `size`, `empty`, `begin`/`end`, `subtree_first/last`, `successor/predecessor`, `insert_before/after`, `erase`), and so is the meaning of a `nullptr` anchor for `insert_before/after`. But `Node` has two more fields, which **must be correct for every node after every operation**:
 
-## Stage 5 — O(n) 建樹與所有權
+- `height`: 0 for a leaf; an empty subtree counts as -1.
+- `size`: the number of nodes in this subtree.
 
-- `static AvlTree build(std::vector<T> items)`：建出 traversal order 等於 `items` 的 AVL tree，O(n)。`combine` 呼叫次數不超過 `3n`。
-- move constructor / move assignment：被移走的樹變空，要 `noexcept`。
+As before, `erase` may invalidate only the erased node, and it must not swap items. This stage doesn't balance yet.
 
-## 面試追問
+## Stage 2 — Rotation
 
-1. AVL 的高度上界為什麼是 `1.44 lg n`？（寫出 Fibonacci 遞迴）跟 Red-Black 比，AVL 的取捨是什麼？
-2. 插入最多旋轉幾次？刪除為什麼可能要旋轉 O(log n) 次？
-3. 為什麼 rotation 不改變 traversal order？實作上為什麼一定要**先**更新子節點的欄位，再更新父節點？
+```cpp
+// in class AvlTree<T, Aug>
+Node* rotate_left(Node* node);
+Node* rotate_right(Node* node);
+```
+
+`rotate_left(x)` (requires `x` to have a right child) / `rotate_right(x)` (requires a left child): O(1). Return the node that takes `x`'s place. The `traversal order` doesn't change, and the `height` and `size` (and, from Stage 4 on, the `aug`) of the two nodes that move must be recomputed. The ancestors' fields are the caller's responsibility; this step doesn't need to update them. The rotation itself must still link the new node into `x`'s old place, under `x`'s old parent or as the tree's root (the tests check `root()` after rotating the root).
+
+## Stage 3 — Staying balanced
+
+Every node must be height-balanced: the heights of its left and right subtrees differ by at most 1 (skew ∈ {-1, 0, 1}).
+
+After every `insert_before/after` or `erase`, walk from the lowest point that changed up to the root, repairing with one or two rotations (a single rotation for the lecture's cases 1/2, a double rotation for case 3), and update `height` and `size` along the way. Every `Node*` must stay valid across rotations.
+
+- Every operation is O(log n).
+- After inserting `n` elements in sequence, the height must be ≤ `1.45 lg(n + 2)`.
+
+## Stage 4 — Subtree Augmentation
+
+```cpp
+// An augmentation folds a monoid over the traversal order of every subtree.
+struct NoAugment {
+    struct Value {};
+    static Value identity() { return {}; }
+    template <typename T>
+    static Value of(const T&) {
+        return {};
+    }
+    static Value combine(const Value&, const Value&) { return {}; }
+};
+
+// in class AvlTree<T, Aug>
+void refresh(Node* node);
+```
+
+The second template parameter, `Aug`, describes the summary to maintain on every subtree:
+
+```cpp
+struct SumAug {
+    using Value = long long;                   // one copy stored in every node
+    static Value identity() { return 0; }      // the empty subtree
+    static Value of(const T& item);            // the summary of a single item
+    static Value combine(const Value& a, const Value& b);  // not necessarily commutative: a comes first in traversal order
+};
+```
+
+- For every node: `node->aug == combine(combine(aug(left), of(item)), aug(right))`, using `identity()` for a missing child. **`combine` is not guaranteed to be commutative** (string concatenation, matrix multiplication), so if you get the order wrong, the tests fail.
+- Every `insert`/`erase`/`rotate` maintains this invariant while calling `combine` only O(log n) times (the tests allow `24 lg n + 24` calls per erase-plus-insert pair); you must not recompute the whole tree.
+- `refresh(node)`: after the caller has modified `node->item` directly, recompute the `aug` values on the path from `node` to the root (O(log n), with at most `6 lg n + 8` calls to `combine` in the tests; heights and sizes don't change).
+
+## Stage 5 — Building in O(n), and ownership
+
+```cpp
+// in class AvlTree<T, Aug>
+AvlTree(AvlTree&& other);             // should be noexcept once implemented
+AvlTree& operator=(AvlTree&& other);  // should be noexcept once implemented
+
+static AvlTree build(std::vector<T> items);
+```
+
+- `static AvlTree build(std::vector<T> items)`: build an AVL tree whose traversal order equals `items`, in O(n). Call `combine` at most `3n` times.
+- Move constructor / move assignment: the moved-from tree becomes empty, and both must be `noexcept`. A self-move-assignment (`t = std::move(t)`) must leave the tree unchanged; the tests check it.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why is the height of an AVL tree bounded by `1.44 lg n`? (Write out the Fibonacci recurrence.) Compared with a Red-Black tree, what trade-offs does an AVL tree make?
+2. At most how many rotations can an insertion need? Why might a deletion need O(log n) rotations?
+3. Why doesn't a rotation change the traversal order? In the implementation, why must you update the child's fields **first** and the parent's afterwards?

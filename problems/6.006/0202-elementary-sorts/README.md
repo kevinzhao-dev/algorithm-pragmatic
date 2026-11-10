@@ -1,6 +1,6 @@
 ---
-title: Selection Sort、Insertion Sort 與 Top-K Tracker
-unit: 02 · Sorting & Recurrences（PS2）
+title: Selection Sort, Insertion Sort, and Top-K Tracker
+unit: 02 · Sorting & Recurrences (PS2)
 source: 6.006 Lecture 3, Recitation 3
 pdf: materials/6.006/lectures/lec03.pdf
 read: materials/6.006/recitations/rec03.pdf
@@ -8,39 +8,72 @@ kind: code
 minutes: 55
 ---
 
-# 0202 · 基本排序
+# 0202 · Elementary Sorts
 
-> **實務上為什麼會遇到**：標準函式庫裡的 sort 幾乎都會在小區間換成 insertion sort（資料少、幾乎排好時它最快）；Selection sort 的「元素搬動最少」在寫入很貴的儲存裝置上仍有意義。
+**Based on:** [Lecture 3: Sorting notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6d1ae5278d02bbecb5c4428928b24194_MIT6_006S20_lec3.pdf) · **Read first:** [Recitation 3 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/1869dbf640ded6b31f1bd369d2001ef5_MIT6_006S20_r03.pdf)
 
-以下每個函式都用 `less(a, b)` 比較，預設 `std::less<T>`，元素只保證可 move。`items` 是 `std::span<T>`：**原地排序**，不可配置任何記憶體（測試會計算 allocation 次數）。呼叫時寫 `selection_sort<int>(values)`。
+> **Why this comes up in practice:** almost every sort in a standard library switches to insertion sort on small ranges (it is the fastest when there is little data or the data is nearly sorted). Selection sort's "fewest element moves" still matters on storage devices where writes are expensive.
+
+## Your task
+
+Every function below compares with `less(a, b)`, which defaults to `std::less<T>`, and elements are only guaranteed to be movable. `items` is a `std::span<T>`: **sort in place**, without allocating any memory (the tests count allocations). Call them as `selection_sort<int>(values)`.
+
+You write selection sort and insertion sort, then reuse insertion sort's insert step to keep a top-k list.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Selection Sort
 
-`selection_sort<T>(items, less)`：每一輪從尚未排好的部分選出最大的，swap 到正確位置。
+```cpp
+template <typename T, typename Less = std::less<T>>
+void selection_sort(std::span<T> items, Less less = {});
+```
 
-- 元素搬動（copy + move）**總數 ≤ 3(n − 1)**，也就是最多 `n − 1` 次 swap（測試用 `Probe` 計數）。
-- 比較次數 Θ(n²) 無妨。
+`selection_sort<T>(items, less)`: in each round, pick the largest element of the part that isn't sorted yet and swap it into its correct position.
+
+- The **total number of element moves (copy + move) is ≤ 3(n − 1)**, that is, at most `n − 1` swaps (the tests count them with `Probe`).
+- Θ(n²) comparisons are fine.
 
 ## Stage 2 — Insertion Sort
 
-`insertion_sort<T>(items, less)`：把每個元素往前插入已排好的前綴。
+```cpp
+template <typename T, typename Less = std::less<T>>
+void insertion_sort(std::span<T> items, Less less = {});
+```
 
-- **穩定（stable）**：比較結果相等的元素維持輸入順序。
-- **對幾乎排好的資料要快**：令 `I` 為輸入的反序對數量，比較次數 ≤ `2n + I`，搬動次數 ≤ `3(n + I)`。已排序的輸入只需要 O(n)。
+`insertion_sort<T>(items, less)`: insert each element backward into the already sorted prefix.
 
-## Stage 3 — 實務延伸：Top-K Tracker
+- **Stable**: elements that compare equal keep their input order.
+- **It must be fast on nearly sorted data**: let `I` be the number of inversions in the input; then comparisons ≤ `2n + I` and moves ≤ `3(n + I)`. Input that is already sorted takes only O(n), and it must not move any element at all (0 copies and 0 moves): leave an element that is already in place where it is, rather than moving it into a temporary and back.
 
-`TopK<T, Less>`：持續接收資料，隨時回答「目前最大的 k 個」。儀表板的排行榜、搜尋結果的前十名，k 小的時候直接維護一個排好序的小陣列最實際（k 大時才值得用 heap，Lecture 8 會教）。
+## Stage 3 — Real-world extension: Top-K Tracker
 
-- `explicit TopK(k)`：`k ≥ 1`，否則丟 `std::invalid_argument`。
-- `push(value)`：O(k)，用 insertion sort 的插入步驟把新元素放進去；超過 `k` 個時淘汰最小的。若新元素不大於目前第 k 名（用 `less` 判斷），就直接丟棄。
-- `items()`：`std::span<const T>`，**由大到小**。平手時先進來的排前面（穩定）。
-- `size()`：目前保存幾個（`≤ k`）。
+```cpp
+template <typename T, typename Less = std::less<T>>
+class TopK {
+public:
+    explicit TopK(std::size_t k, Less less = {});
 
-每次 `push` 的元素搬動次數不可超過 `k + 8`，不可每次都重新整個排序。
+    void push(T value);
 
-## 面試追問
+    std::span<const T> items() const;
+    std::size_t size() const;
+};
+```
 
-1. 什麼時候你真的會選 selection sort？寫入成本是比較成本的幾倍時才划算？
-2. 為什麼 insertion sort 是 stable，而這份 selection sort 不是？給一個最小的反例。
-3. `std::sort` 的 introsort 為什麼在小區間換成 insertion sort？反序對數量跟它的執行時間有什麼關係？
+`TopK<T, Less>`: keeps receiving data and can answer "the k largest so far" at any time. For a dashboard leaderboard or the top ten search results, when k is small, maintaining a small sorted array directly is the most practical choice (a heap only pays off when k is large; Lecture 8 covers it).
+
+- `explicit TopK(k)`: `k ≥ 1`; otherwise throw `std::invalid_argument`.
+- `push(value)`: O(k). Put the new element in place with insertion sort's insert step; once there are more than `k`, evict the smallest. If the new element is not larger than the current k-th place (as judged by `less`), just discard it.
+- `items()`: a `std::span<const T>`, **from largest to smallest**. On ties, the one that arrived first comes first (stable).
+- `size()`: how many are currently kept (`≤ k`).
+
+Each `push` must move elements at most `k + 8` times, so you can't re-sort everything on every push.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. When would you actually choose selection sort? How many times more expensive than a comparison does a write have to be before it pays off?
+2. Why is insertion sort stable while this selection sort is not? Give a minimal counterexample.
+3. Why does `std::sort`'s introsort switch to insertion sort on small ranges? How is the number of inversions related to insertion sort's running time?

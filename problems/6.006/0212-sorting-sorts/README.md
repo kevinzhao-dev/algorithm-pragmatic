@@ -1,6 +1,6 @@
 ---
-title: 依成本模型選排序法
-unit: 02 · Sorting & Recurrences（PS2）
+title: Choosing a Sort by Cost Model
+unit: 02 · Sorting & Recurrences (PS2)
 source: 6.006 PS2 Problem 2-2
 pdf: materials/6.006/psets/ps2/questions.pdf
 answer: materials/6.006/psets/ps2/solutions.pdf
@@ -9,34 +9,71 @@ kind: code
 minutes: 45
 ---
 
-# 0212 · 依成本模型選排序法
+# 0212 · Choosing a Sort by Cost Model
 
-> **實務上為什麼會遇到**：真實系統的成本模型很少是「比較和搬動都一樣貴」。flash 的寫入貴、跨機器比較大物件貴、資料幾乎已排序（時間序列、線上更新）也常見。選對演算法靠的是先想清楚：**貴的是什麼操作？**
+**Original problem:** [Problem Set 2 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/70d9c6b212c6dfce6723259ffb429521_MIT6_006S20_ps2-questions.pdf) · **Read first:** [Lecture 3: Sorting notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/6d1ae5278d02bbecb5c4428928b24194_MIT6_006S20_lec3.pdf)
 
-作業的三個情境各自讓一種基本排序（selection、insertion、merge）勝出。這題把「為什麼」變成可驗證的預算：**函式依自己選的演算法實作，測試計算貴的操作次數，超過預算就失敗。** 這三關的 selection、insertion、merge sort 都可以直接搬 0202、0203 的版本改寫。
+> **Why this comes up in practice:** in real systems the cost model is rarely "comparisons and moves cost the same." Writes to flash are expensive, comparing large objects across machines is expensive, and data that is almost sorted already (time series, online updates) is common too. Choosing the right algorithm starts with thinking clearly about one question: **which operation is the expensive one?**
 
-## Stage 1 — 寫入很貴
+## Original problem
 
-一個序列 `seq` 只提供 `size()`、`get_at(i)`（便宜）、`set_at(i, v)`（寫入，非常貴）。
+6.006 PS2 Problem 2-2, "Sorting Sorts," describes three scenarios. For each one, pick the best fit among selection sort, insertion sort, and merge sort, and argue for it; the argument counts for more than the pick. The same sort can be the answer to more than one scenario. When more than one sort could work, compare their trade-offs and go with the one that suits the scenario best, and spell out and defend any assumptions. Judge "best" by asymptotic running time.
 
-`sort_expensive_writes(seq)`：把 `seq` 排成遞增，**`set_at` 呼叫次數 ≤ 2(n − 1)**（每次交換算兩次寫入）。元素可以比較大小與移動/複製。讀取次數不限制（可以 O(n²)）。
+- (a) A data structure D keeps n items in an "extrinsic order" and offers `D.get_at(i)` in worst-case Θ(1) time and `D.set_at(i, x)` in worst-case Θ(n log n) time. The items must be sorted in place, within D.
+- (b) A static array A stores pointers to n comparable objects, and comparing any two of the objects costs Θ(log n) time. Reorder the pointers so that the objects they point to are in non-decreasing order.
+- (c) A sorted array A of n integers, each fitting in a single machine word, has been disturbed by log log n swaps of adjacent items, so it is no longer sorted. Restore its sorted order.
 
-## Stage 2 — 比較很貴
+The answers are written; there is no code.
 
-`sort_pointers(pointers, less)`：`pointers` 是 `std::span<const T*>`，指向 `n` 個物件。把**指標**重新排列，使得指向的物件依 `less(const T&, const T&)` 遞增（物件本身不動，可能有相等）。
+## Your task
 
-每次 `less` 的成本遠高於移動指標（物件很大或比較要經過網路），所以**比較次數 ≤ 1.5·n·⌈log₂ n⌉ + n**。
+Each of the problem set's three scenarios makes a different elementary sort (selection, insertion, merge) the winner. This exercise turns the "why" into a budget you can verify: **implement each function with the algorithm you choose; the tests count the expensive operations and fail if you go over budget.** For the selection, insertion, and merge sorts in these three stages, you can adapt your versions from 0202 and 0203 directly.
 
-## Stage 3 — 資料幾乎排好
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`repair_nearly_sorted<T>(items, less)`（預設 `std::less<T>`）：`items` 是某個排好序的陣列，經過**未知次數 k 次**相鄰元素交換後的結果。把它排回遞增。
+## Stage 1 — Writes are expensive
 
-比較次數 ≤ `2n + 2k`，也就是對幾乎排好的資料要接近線性（`k` 不會傳給你）。
+```cpp
+template <typename Seq>
+void sort_expensive_writes(Seq& seq);
+```
 
-## 面試追問
+A sequence `seq` offers only `size()`, `get_at(i)` (cheap), and `set_at(i, v)` (a write, and very expensive).
 
-每一關都要能講出取捨，這才是原題的重點：
+`sort_expensive_writes(seq)`: sort `seq` into increasing order with **at most 2(n − 1) calls to `set_at`** (each swap counts as two writes). Elements can be compared and moved/copied. The number of reads is not limited (O(n²) is fine).
 
-1. Stage 1 為什麼不用 insertion 或 merge？`set_at` 的成本要大到多少，selection sort 才值得？
-2. Stage 2 為什麼是 merge 而不是 selection？如果比較便宜、但要穩定排序物件本身（會搬動大物件），答案會怎麼變？
-3. Stage 3 為什麼一次相鄰交換最多只增加一個 inversion？`k = log log n` 時 insertion sort 的時間是多少？
+## Stage 2 — Comparisons are expensive
+
+```cpp
+template <typename T, typename Less>
+void sort_pointers(std::span<const T*> pointers, Less less);
+```
+
+`sort_pointers(pointers, less)`: `pointers` is a `std::span<const T*>` that points to `n` objects. Rearrange the **pointers** so that the objects they point to are in increasing order according to `less(const T&, const T&)` (the objects themselves don't move, and some may be equal).
+
+Each call to `less` costs far more than moving a pointer (the objects are large, or comparing them goes over the network), so **use at most 1.5·n·⌈log₂ n⌉ + n comparisons**.
+
+## Stage 3 — The data is nearly sorted
+
+```cpp
+template <typename T, typename Less = std::less<T>>
+void repair_nearly_sorted(std::span<T> items, Less less = {});
+```
+
+`repair_nearly_sorted<T>(items, less)` (`less` defaults to `std::less<T>`): `items` is what remains of a sorted array after **an unknown number k** of swaps of adjacent elements. Sort it back into increasing order.
+
+Use at most `2n + 2k` comparisons, which means close to linear time on nearly sorted data (`k` is not passed to you).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+For every stage you must be able to explain the trade-off; that is the real point of the original problem:
+
+1. Why not use insertion or merge in Stage 1? How expensive does `set_at` have to be before selection sort is worth it?
+2. Why merge rather than selection in Stage 2? If comparisons were cheap but you had to stably sort the objects themselves (moving large objects), how would the answer change?
+3. In Stage 3, why can one adjacent swap add at most one inversion? What is insertion sort's running time when `k = log log n`?
+
+---
+
+**Official solution:** [Problem Set 2 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/b06b8a8baf9b15f98947e75bae55b8bf_MIT6_006S20_ps2-solutions.pdf). Read it after you finish.

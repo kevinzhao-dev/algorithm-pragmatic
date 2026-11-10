@@ -1,6 +1,6 @@
 ---
-title: AVL Set／Map（order statistics）
-unit: 04 · Trees & Heaps（PS4）
+title: AVL Set/Map (order statistics)
+unit: 04 · Trees & Heaps (PS4)
 source: 6.006 Lecture 7, Recitation 7
 pdf: materials/6.006/recitations/rec07.pdf
 read: materials/6.006/lectures/lec07.pdf, materials/6.006/recitations/rec06.pdf
@@ -8,58 +8,119 @@ kind: code
 minutes: 80
 ---
 
-# 0403 · AVL Set／Map
+# 0403 · AVL Set/Map
 
-> **實務上為什麼會遇到**：`std::map` 的介面、資料庫的 ordered index、排行榜的「第幾名」，都是一棵帶 subtree size 的平衡樹。
+**Based on:** [Recitation 7 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/16d43dec3488717057d7daff2bac3400_MIT6_006S20_r07.pdf) · **Read first:** [Lecture 7: Binary Trees, Part 2: AVL notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/a2c80596cf4a2b5fbc854afdd2f23dcb_MIT6_006S20_lec7.pdf), [Recitation 6 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/e215840fd7b0e8cb07916a65c17252b2_MIT6_006S20_r06.pdf)
 
-用 0402 的 `AvlTree` 在 `solution.hpp` 實作有序的 key-value Map：traversal order 就是排序好的 key。請直接 `#include "../0402-avl-tree/solution.hpp"`，重用你寫好的引擎，不要重寫平衡邏輯。
+> **Why this comes up in practice:** the `std::map` interface, a database's ordered index, and a leaderboard's "what place am I in?" are all a balanced tree that carries subtree sizes.
+
+## Your task
+
+Use the `AvlTree` from 0402 to implement an ordered key-value Map in `solution.hpp`: the traversal order is the sorted order of the keys. `#include "../0402-avl-tree/solution.hpp"` directly and reuse the engine you wrote; don't rewrite the balancing logic.
 
 ```cpp
 template <typename K, typename V, typename Aug = NoAugment, typename Compare = std::less<K>>
 class AvlMap;
 ```
 
-`struct Item { K key; V value; }`，`Node` 就是 `AvlTree<Item, Aug>::Node`。每個操作都是 O(log n)。
+`struct Item { K key; V value; }`, and `Node` is `AvlTree<Item, Aug>::Node`. Every operation is O(log n).
 
-## Stage 1 — Set 介面
+Each stage lists the declarations it adds, copied from `solution.hpp`.
 
-| 操作 | 行為 |
+## Stage 1 — Set interface
+
+```cpp
+template <typename K, typename V, typename Aug = NoAugment, typename Compare = std::less<K>>
+class AvlMap {
+public:
+    struct Item {
+        K key;
+        V value;
+    };
+    using Tree = AvlTree<Item, Aug>;
+    using Node = typename Tree::Node;
+
+    explicit AvlMap(Compare compare = Compare{});
+
+    Node* find(const K& key) const;
+    bool contains(const K& key) const;
+    bool insert(K key, V value = V{});
+    bool erase(const K& key);
+    void set_value(Node* node, V value);
+    std::size_t size() const;
+    bool empty() const;
+    const Tree& tree() const;
+    Node* min() const;
+    Node* max() const;
+};
+
+template <typename K, typename Compare = std::less<K>>
+using AvlSet = AvlMap<K, std::monostate, NoAugment, Compare>;  // provided
+```
+
+| Operation | Behavior |
 | --- | --- |
-| `insert(k, v = V{})` | 新 key 回傳 `true`；key 已存在時**覆蓋 value** 並回傳 `false` |
-| `find(k)` | 回傳節點，沒有時 `nullptr` |
-| `contains(k)` / `erase(k)` | `erase` 有刪到回傳 `true` |
-| `set_value(node, v)` | 改掉節點的 value，並維持 augmentation |
-| `min()` / `max()` | 回傳節點，空樹回傳 `nullptr` |
-| `size()` / `empty()` / `tree()` | `tree()` 回傳底層樹的 const reference |
+| `insert(k, v = V{})` | Return `true` for a new key; if the key already exists, **overwrite the value** and return `false` |
+| `find(k)` | Return the node, or `nullptr` if the key is absent |
+| `contains(k)` / `erase(k)` | `erase` returns `true` if it removed a key |
+| `set_value(node, v)` | Replace the node's value and maintain the augmentation |
+| `min()` / `max()` | Return the first/last node in `Compare` order, or `nullptr` for an empty tree |
+| `size()` / `empty()` / `tree()` | `tree()` returns a const reference to the underlying tree |
 
-`AvlSet<K, Compare>`（已提供）就是 value 為 `std::monostate` 的 `AvlMap`。
+`AvlSet<K, Compare>` (provided) is just an `AvlMap` whose value is `std::monostate`.
 
-## Stage 2 — 排序查詢
+## Stage 2 — Ordered queries
 
-- `find_next(k)`：key 最小且 `> k` 的節點；`find_prev(k)`：key 最大且 `< k` 的節點。沒有時回傳 `nullptr`。`k` 本身不一定存在。
+```cpp
+// in class AvlMap<K, V, Aug, Compare>
+Node* find_next(const K& key) const;
+Node* find_prev(const K& key) const;
+```
+
+- `find_next(k)`: the node with the smallest key `> k`; `find_prev(k)`: the node with the largest key `< k`. Return `nullptr` if there is none. `k` itself need not be present.
 
 ## Stage 3 — Order Statistics
 
-用節點上的 `size`：
+```cpp
+// in class AvlMap<K, V, Aug, Compare>
+std::size_t rank(const K& key) const;
+Node* select(std::size_t index) const;
+```
 
-- `rank(k)`：比 `k` 小的 key 有幾個（`k` 不必存在）。
-- `select(i)`：第 `i` 小（0 起算）的節點；`i >= size()` 時丟 `std::out_of_range`。
+Use the `size` stored on each node:
 
-## Stage 4 — 實務延伸：排行榜
+- `rank(k)`: how many keys are smaller than `k` (`k` need not be present).
+- `select(i)`: the node with the `i`-th smallest key (counting from 0); throw `std::out_of_range` if `i >= size()`.
 
-`Leaderboard`：玩家用字串 ID 識別，分數可正可負。
+## Stage 4 — Real-world extension: leaderboard
 
-- `upsert(player, score)`：新增玩家或更新分數。
-- `remove(player)`：回傳玩家是否存在。
-- `rank_of(player)`：名次，0 是第一名；分數高的在前，同分時 ID 字典序小的在前。不存在回傳 `std::nullopt`。
-- `player_at(rank)`：該名次的玩家，超出範圍時 `std::nullopt`。
-- `top(k)`：前 `k` 名的 `(player, score)`，由第一名開始。`k` 超過人數時回傳全部。
-- `size()`。
+```cpp
+class Leaderboard {
+public:
+    void upsert(const std::string& player, std::int64_t score);
+    bool remove(const std::string& player);
+    std::optional<std::size_t> rank_of(const std::string& player) const;
+    std::optional<std::string> player_at(std::size_t rank) const;
+    std::vector<std::pair<std::string, std::int64_t>> top(std::size_t count) const;
+    std::size_t size() const;
+};
+```
 
-除了 `top`（O(k + log n)）以外，每個操作都是 O(log n)（期望，因為要用 hash map 從 ID 找到分數）。
+`Leaderboard`: players are identified by string IDs, and scores can be positive or negative.
 
-## 面試追問
+- `upsert(player, score)`: add a player or update their score.
+- `remove(player)`: return whether the player existed.
+- `rank_of(player)`: the player's place, where 0 is first place. Higher scores come first, and among equal scores the lexicographically smaller ID comes first. Return `std::nullopt` if the player doesn't exist.
+- `player_at(rank)`: the player in that place, or `std::nullopt` if it is out of range.
+- `top(k)`: the `(player, score)` pairs of the top `k` places, starting from first place. If `k` exceeds the number of players, return all of them.
+- `size()`.
 
-1. 比較 hash map 和 balanced BST：什麼需求一出現，hash map 就不夠用了？
-2. `rank` 和 `select` 為什麼一定要靠 subtree size？如果只有 `height`，能做到嗎？
-3. 排行榜要支援「分數區間內有幾人」，你會加什麼 augmentation？（需要嗎？）
+Every operation except `top` (O(k + log n)) is O(log n) (expected, because you need a hash map to find a score from an ID).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Compare a hash map with a balanced BST: which requirements make a hash map insufficient the moment they appear?
+2. Why must `rank` and `select` rely on subtree sizes? Could you do it with only `height`?
+3. If the leaderboard had to answer "how many players have a score in a given range", what augmentation would you add? (Do you need one?)

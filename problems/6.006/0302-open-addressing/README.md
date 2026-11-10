@@ -1,6 +1,6 @@
 ---
-title: Open Addressing（linear probing 與刪除）
-unit: 03 · Hashing & Linear Sorting（PS3）
+title: Open Addressing (linear probing and deletion)
+unit: 03 · Hashing & Linear Sorting (PS3)
 source: 6.006 Lecture 4, Recitation 4
 pdf: materials/6.006/recitations/rec04.pdf
 read: materials/6.006/lectures/lec04.pdf
@@ -10,48 +10,85 @@ minutes: 70
 
 # 0302 · Open Addressing
 
-> **實務上為什麼會遇到**：Redis、Google 的 `absl::flat_hash_map`、V8 的 property table 都用 open addressing，因為一條連續陣列比 chaining 的節點對 cache 友善得多。代價全在刪除：一不小心就把還在表裡的 key 弄丟，或讓 tombstone 慢慢拖垮整張表。
+**Based on:** [Recitation 4 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/bd220fb629aefdf30f416b5abf45d38d_MIT6_006S20_r04.pdf) · **Read first:** [Lecture 4: Hashing notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ce9e94705b914598ce78a00a70a1f734_MIT6_006S20_lec4.pdf)
 
-用 linear probing 實作 `OpenAddressingSet<K, Hash>`：所有資料都放在一條 slots 陣列裡，碰撞時往下一格找。不准用 `std::unordered_set`。
+> **Why this comes up in practice:** Redis, Google's `absl::flat_hash_map`, and V8's property tables all use open addressing, because one contiguous array is far friendlier to the cache than chaining's nodes. The whole cost is in deletion: one slip and you lose a key that is still in the table, or let tombstones slowly drag the whole table down.
 
-## Stage 1 — 插入與查詢
+## Your task
 
-| 操作 | 行為 |
+Implement `OpenAddressingSet<K, Hash>` with linear probing: all the data lives in a single array of slots, and on a collision you try the next slot. Do not use `std::unordered_set`.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Insert and lookup
+
+```cpp
+template <typename K, typename Hash = std::hash<K>>
+class OpenAddressingSet {
+public:
+    explicit OpenAddressingSet(Hash hash = Hash{});
+
+    bool insert(K key);
+    bool contains(const K& key) const;
+    std::size_t size() const;
+    std::size_t capacity() const;
+};
+```
+
+| Operation | Behavior |
 | --- | --- |
-| `insert(key)` | 新 key 回傳 `true`，已存在回傳 `false` |
-| `contains(key)` | 是否存在 |
-| `size()` | 目前的 key 數 |
-| `capacity()` | slots 的數量；隨時要 `size() < capacity()`（probe 才找得到空格停下來） |
+| `insert(key)` | Return `true` for a new key, or `false` if it is already present |
+| `contains(key)` | Whether the key is present |
+| `size()` | The current number of keys |
+| `capacity()` | The number of slots; `size() < capacity()` must hold at all times (so that a probe always finds an empty slot to stop at) |
 
-- `Hash` 可能很爛。libc++ 的 `std::hash<int>` 就是 identity，如果 capacity 是 2 的冪次又直接取低位，所有 `1 << 20` 的倍數都會擠在同一格；表內部要再 **mix** 一次。
-- 太滿時要 rehash，隨便你選門檻，但要均攤期望 O(1)。
+- `Hash` may be terrible. libc++'s `std::hash<int>` is the identity, so if the capacity is a power of 2 and you take the low bits directly, every multiple of `1 << 20` lands in the same slot; the table must **mix** the hash once more internally.
+- Rehash when the table gets too full. Any threshold you like is fine, but operations must be amortized expected O(1).
 
-## Stage 2 — 刪除（tombstone）
+## Stage 2 — Deletion (tombstones)
 
-`erase(key)`：存在則移除並回傳 `true`，否則回傳 `false`。
+```cpp
+// in class OpenAddressingSet<K, Hash>
+bool erase(const K& key);
+```
 
-這關的陷阱：
+`erase(key)`: if the key is present, remove it and return `true`; otherwise return `false`.
 
-- 不能直接把 slot 清空：同一條 probe 路徑後面的 key 會找不到。
-- `insert` 遇到 tombstone 不能馬上停，要繼續往後確認 key 沒有出現在更後面，否則同一個 key 會被放兩次。
-- 確認不存在後，新 key 應該放回路徑上遇到的第一個 tombstone。
+The traps in this stage:
 
-## Stage 3 — Tombstone 不能累積
+- You must not simply empty the slot: keys further along the same probe path would become unreachable.
+- `insert` must not stop as soon as it meets a tombstone. It must keep going to confirm that the key doesn't appear further along; otherwise the same key gets stored twice.
+- Once you have confirmed that the key is absent, the new key should go into the first tombstone you passed on the path.
 
-- key 不斷進出時，tombstone 不能無限累積，否則「查一個不存在的 key」會掃過整張表。解法自選：把 tombstone 算進 load 並定期重建，或改用 backward-shift deletion。
-- 刪到很少 key 時要縮表：`capacity() ≤ 8 × size() + 64`。
-- 重建不能遺失任何 key。
+## Stage 3 — Tombstones must not accumulate
 
-## Stage 4 — 實務延伸：去重視窗
+- When keys keep coming and going, tombstones must not pile up without bound; otherwise looking up a missing key scans the whole table. The fix is your choice: count tombstones toward the load and rebuild periodically, or switch to backward-shift deletion.
+- When deletions leave very few keys, the table must shrink: `capacity() ≤ 8 × size() + 64`.
+- A rebuild must not lose any key.
 
-用你的 set 做 `DedupWindow<K>`，訊息佇列重送時用來過濾重複訊息：
+## Stage 4 — Real-world extension: dedup window
 
-- `explicit DedupWindow(ttl)`：`ttl ≥ 1`，否則丟 `std::invalid_argument`。
-- `offer(key, now)`：`now` 不遞減。key 在 `(now - ttl, now]` 內被**接受過**則回傳 `false`（重複，不影響計時）；否則接受並回傳 `true`，並從 `now` 開始算 `ttl`（跟 Redis `SET key NX EX ttl` 同語意）。
-- `size()`：視窗內仍記得的 key 數。過期的 key 要真的被刪掉，記憶體才不會無限長。
+```cpp
+template <typename K, typename Hash = std::hash<K>>
+class DedupWindow {
+public:
+    explicit DedupWindow(std::int64_t ttl, Hash hash = Hash{});
 
-## 面試追問
+    bool offer(const K& key, std::int64_t now);
+    std::size_t size() const;
+};
+```
 
-1. Linear probing 的 cluster 為什麼會越滾越大？double hashing、Robin Hood 各自怎麼解決？
-2. Tombstone 跟 backward-shift deletion 各有什麼取捨？
-3. 為什麼 open addressing 的 load factor 上限比 chaining 低？load 逼近 1 時查詢成本會怎麼變？
+Use your set to build `DedupWindow<K>`, which filters out duplicate messages when a message queue redelivers them:
+
+- `explicit DedupWindow(ttl)`: `ttl ≥ 1`; otherwise throw `std::invalid_argument`.
+- `offer(key, now)`: `now` never decreases. If the key was **accepted** within `(now - ttl, now]`, return `false` (a duplicate, which doesn't affect the timer). Otherwise accept it, return `true`, and start counting its `ttl` from `now` (the same semantics as Redis `SET key NX EX ttl`).
+- `size()`: the number of keys the window still remembers. Expired keys must actually be deleted, so that memory doesn't grow without bound.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why do linear probing's clusters keep snowballing? How do double hashing and Robin Hood hashing each deal with it?
+2. What are the trade-offs between tombstones and backward-shift deletion?
+3. Why is the load factor limit for open addressing lower than for chaining? How does the cost of a lookup change as the load approaches 1?

@@ -1,6 +1,6 @@
 ---
-title: vEB 的兩種變形（Policy-based 設計）
-unit: 03 · van Emde Boas（PS3）
+title: Two vEB Variants (policy-based design)
+unit: 03 · van Emde Boas (PS3)
 source: 6.046J PS3 Problem 3-1
 pdf: materials/6.046j/psets/ps03/questions.pdf
 answer: materials/6.046j/psets/ps03/solutions.pdf
@@ -9,37 +9,89 @@ kind: code
 minutes: 150
 ---
 
-# 0311 · vEB 的兩種變形
+# 0311 · Two vEB Variants
 
-> **實務上為什麼會遇到**：同一個資料結構常常要試多種切割策略和取捨。把變動的部分抽成 policy，讓編譯器在零成本的情況下換掉，比複製程式碼或加 runtime 分支都乾淨。
+**Original problem:** [Problem Set 3](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/c6f512681e64389b446a981c7d963323_MIT6_046JS15_pset3.pdf) · **Read first:** [Divide & Conquer: Van Emde Boas Trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/49c8fa24dffce58052c90d46ac800387_MIT6_046JS15_lec04.pdf)
 
-把 [`0301`](../0301-van-emde-boas/README.md) 的結構改寫成 `template <typename Split, bool ExcludeMax> class Veb`，介面和 0301 相同（`size`、`empty`、`min`、`max`、`contains`、`insert`、`erase`、`successor`、`predecessor`、`node_count`、`visits`），範圍規則也相同。
+> **Why this comes up in practice:** you often need to try several splitting strategies and trade-offs for the same data structure. Pulling the part that varies out into a policy, which the compiler swaps in at zero cost, is cleaner than copying the code or adding runtime branches.
 
-`Split::high_bits(bits)` 決定一層切出幾個高位元（`bits ≥ 2` 時回傳 `[1, bits-1]`），低位元是剩下的。`visits()` 的定義和 0301 一樣，每個操作最多進入 `2·L + 2` 個節點，`L` 是沿較大那一半遞迴的層數。
+## Original problem
 
-這題的目標是**改寫成一個 template**，不要 `Veb` 裡寫三份。用 `if constexpr (ExcludeMax)` 分開不同的情況。
+6.046J PS3 Problem 3-1 ("Variants on van Emde Boas") takes the vEB structure from Lecture 4 (also in CLRS Section 20.3) and changes it in two ways. For each variant, explain how the pseudocode (from the lecture or the textbook) must change, and work out what INSERT, DELETE, and SUCCESSOR now cost relative to the original structure.
 
-## Stage 1 — 三分之一切分
+- (a) Use u^{1/3} clusters of size u^{2/3}, instead of u^{1/2} clusters of size u^{1/2}.
+- (b) With the original u^{1/2} × u^{1/2} split, store the maximum, like the minimum, only in the node's existing max field and never in a recursive substructure.
 
-`Veb<CubeRootSplit, false>`：`u^{1/3}` 個 cluster，每個 `u^{2/3}` 大小。
+## Your task
 
-`CubeRootSplit::high_bits` 已經幫你處理了 `bits == 2`，否則高位元會是 0 導致無窮遞迴。另外測試會確認遞迴深度真的比原本的 `SqrtSplit` 多，也就是你真的照著 policy 切分。
+Rewrite the structure from [`0301`](../0301-van-emde-boas/README.md) as `template <typename Split, bool ExcludeMax> class Veb`. The interface is the same as in 0301 (`size`, `empty`, `min`, `max`, `contains`, `insert`, `erase`, `successor`, `predecessor`, `node_count`, `visits`), and so are the range rules.
 
-## Stage 2 — 最大值也不存進 cluster
+`Split::high_bits(bits)` decides how many high bits one level splits off (for `bits ≥ 2` it returns a value in `[1, bits-1]`); the low bits are the rest. `visits()` is defined as in 0301, and each operation enters at most `2·L + 2` nodes, where `L` is the number of levels when the recursion always follows the larger part.
 
-`Veb<SqrtSplit, true>`：除了 `min`，`max` 也只存在節點上，不存進任何 cluster。
+The goal of this exercise is to **rewrite it as one template**, not to write three copies inside `Veb`. Use `if constexpr (ExcludeMax)` to separate the cases.
 
-- 只有一個元素時 `min == max`；只有兩個元素時 cluster 全空，`node_count() == 1`。**第三個元素才會進 cluster。**
-- `insert` 遇到比 `max` 大的 key，舊的 `max` 要被擠進 cluster，跟 `min` 對稱。
-- `successor` 找不到下一個 cluster 時，答案可能是 `max`，這是最容易漏的一步。`predecessor` 對稱。
-- `erase` 要處理「元素恰好兩個」和「summary 為空」的特殊情況，以及刪到 `max` 時要從最後一個 cluster 拉新的 `max` 上來。
+Stage 1 is part (a), Stage 2 is part (b), and Stage 3 combines them. Instead of describing the pseudocode changes and analyzing them on paper, you implement both variants, and the tests measure the costs through `visits()` and `node_count()`.
 
-## Stage 3 — 兩者並存與任意 Policy
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`Veb<CubeRootSplit, true>` 要能跑；任何符合 `high_bits` 規約的 policy 也要能跑（測試自訂了一個固定切高 4 位元的 policy）。不要假設 `Split` 只有這兩種，也不要把「max 不進 cluster」的判斷寫成只對某個 policy 成立。
+## Stage 1 — Splitting into thirds
 
-## 面試追問
+```cpp
+// How many high-order bits become the cluster number when a level splits `bits` bits.
+struct SqrtSplit {
+    static constexpr int high_bits(int bits) { return bits - bits / 2; }  // provided
+};
 
-1. 原題問 `INSERT`、`DELETE`、`SUCCESSOR` 的複雜度要怎麼變。對 `u^{1/3}` 這個切法，遞迴關係是什麼？層數從 `log₂ log₂ u` 變成多少？常數差多少？
-2. 把 `max` 也排除，漸進複雜度完全沒變，那換到的是什麼？省下來的節點和多寫的分支，哪個比較划算？
-3. 用 `if constexpr` 和用虛擬函式（strategy pattern）分別有什麼取捨？這裡為什麼前者比較對？
+struct CubeRootSplit {
+    static constexpr int high_bits(int bits) { return std::max(1, bits / 3); }  // provided
+};
+
+template <typename Split, bool ExcludeMax>
+class Veb {
+public:
+    explicit Veb(int universe_bits);
+
+    std::size_t size() const;
+    bool empty() const;
+    std::optional<std::uint64_t> min() const;
+    std::optional<std::uint64_t> max() const;
+    bool contains(std::uint64_t x) const;
+    bool insert(std::uint64_t x);
+    bool erase(std::uint64_t x);
+    std::optional<std::uint64_t> successor(std::uint64_t x) const;
+    std::optional<std::uint64_t> predecessor(std::uint64_t x) const;
+    std::size_t node_count() const;
+
+    // Cost model used by the tests: the number of vEB nodes entered so far.
+    std::uint64_t visits() const;
+};
+```
+
+`Veb<CubeRootSplit, false>`: `u^{1/3}` clusters, each of size `u^{2/3}`. As in 0301, a summary or cluster exists only while it holds something: a single key needs only the root (`node_count() == 1`), and a second key already adds a summary and a cluster (`node_count() == 3`).
+
+`CubeRootSplit::high_bits` already handles `bits == 2` for you; otherwise the high part would have 0 bits and the recursion would never end. The tests also confirm that the recursion really is deeper than with the original `SqrtSplit`, that is, that you really split according to the policy.
+
+## Stage 2 — Keeping the maximum out of the clusters too
+
+`Veb<SqrtSplit, true>`: besides `min`, `max` is also stored only on the node and never in any cluster.
+
+- With one element, `min == max`; with exactly two elements, every cluster is empty and `node_count() == 1`. **Only the third element enters a cluster.**
+- When `insert` gets a key larger than `max`, the old `max` has to be pushed down into a cluster, symmetric to `min`.
+- When `successor` finds no next cluster, the answer may be `max`; this is the step people miss most often. `predecessor` is symmetric.
+- `erase` must handle the special cases "exactly two elements" and "empty summary", and when it deletes `max`, it must pull the new `max` up from the last cluster.
+
+## Stage 3 — Both variants together, and any policy
+
+`Veb<CubeRootSplit, true>` must work, and so must any policy that follows the `high_bits` contract (the tests define their own policy that splits off a fixed 4 high bits). Don't assume `Split` comes in only these two kinds, and don't write the "max stays out of the clusters" logic in a way that holds for only one particular policy.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. The original problem asks how the complexity of `INSERT`, `DELETE`, and `SUCCESSOR` changes. For the `u^{1/3}` split, what is the recurrence? Starting from `log₂ log₂ u`, what does the number of levels become? How much does the constant change?
+2. Excluding `max` as well doesn't change the asymptotic complexity at all, so what do you gain? Which wins: the nodes you save, or the extra branches you write?
+3. What are the trade-offs between `if constexpr` and virtual functions (the strategy pattern)? Why is the former the better fit here?
+
+---
+
+**Official solution:** [Solutions to Problem Set 3](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/3e83fa6454e5ebe6bf1bcb1b4a122f6d_MIT6_046JS15_pset3sols.pdf). Read it after you finish.

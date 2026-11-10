@@ -1,7 +1,7 @@
 ---
-title: 遞迴平行轉置
-unit: 06 · Work/Span 理論（HW5）
-source: 6.172 HW5 Write-up 5（CLRS 27.2-5）
+title: Recursive Parallel Transpose
+unit: 06 · Work/Span Theory (HW5)
+source: 6.172 HW5 Write-up 5 (CLRS 27.2-5)
 pdf: materials/6.172/homework/hw05/handout.pdf
 read: materials/6.172/lectures/lec08.pdf
 kind: code
@@ -9,31 +9,56 @@ sanitizer: tsan
 minutes: 90
 ---
 
-# 0615 · 遞迴平行轉置
+# 0615 · Recursive Parallel Transpose
 
-> **實務上為什麼會遇到**：tensor 的 layout 轉換（channel-first ↔ channel-last）、影像旋轉、FFT 的 bit-reversal 都要做 transpose。分治法除了能平行，還有天生的 cache-oblivious 行為，同一份程式碼在 L1 和 L2 都表現得不錯。
+**Original problem:** [HW5: Theory of Performance Engineering](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/cd57dbdecbce3bd4da39d620c1e61d14_MIT6_172F18hw5.pdf) · **Read first:** [Analysis of Multithreaded Algorithms](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/5655e50541f85421cc47b7c85d8e5de3_MIT6_172F18_lec8.pdf)
 
-平行迴圈版的轉置已經在 0501 做過。這題用 **分治**，把 `n×n` 分成四塊 `A11 A12 / A21 A22`：A11、A22 各自遞迴就地轉置，A12 與 A21 互相對調（對調時順便轉置）。三件事彼此獨立，可以同時做，這就是它 span 小的原因。
+> **Why this comes up in practice:** tensor layout conversion (channel-first ↔ channel-last), image rotation, and the bit-reversal step of an FFT all need a transpose. Besides parallelizing well, divide and conquer is naturally cache-oblivious, so the same code performs well in both L1 and L2.
 
-演算法寫成 `template <typename Exec>`，用 `exec::Meter`（確定性算 work／span，見 `_shared/01_exec.hpp`）驗證複雜度，用 `exec::ForkJoin` 由 TSan 把關。每交換一對元素、每複製一個元素各 `exec.charge(1)`（`fork2` 本身會再 charge 1，別重複算）。
+## Original problem
 
-## Stage 1 — 就地轉置
+6.172 HW5 Write-up 5 is CLRS Exercise 27.2-5: give an efficient multithreaded algorithm that transposes an n × n matrix in place by divide and conquer, recursively splitting the matrix into four n/2 × n/2 submatrices, and analyze it (work, span, and parallelism). HW5 is a written problem set, so the original asks for pseudocode and an analysis, not a program.
 
-`transpose_square(exec, grid, n, cutoff = 1)`：`grid` 是 `n×n` row-major（`grid.size() == n*n`）。邊長 `<= cutoff` 的子問題改用循序迴圈。
+## Your task
 
-要求（`cutoff = 1`）：
+You already wrote a parallel-loop transpose in 0501. This exercise uses **divide and conquer**: split the `n×n` matrix into four blocks `A11 A12 / A21 A22`; transpose A11 and A22 in place recursively, and exchange A12 with A21 (transposing them as you swap). The three tasks are independent and can run at the same time, which is why the span is small.
 
-- Work 恰好是「交換次數 `n(n-1)/2` + fork 次數」。
-- Span 是 `O(lg n)`：測試要求不超過 `8·⌈lg n⌉ + 16`。
+The algorithms are written as `template <typename Exec>`: `exec::Meter` (which computes work/span deterministically, see `_shared/01_exec.hpp`) verifies the complexity, and with `exec::ForkJoin`, TSan guards against races. `exec.charge(1)` for each pair of elements swapped and for each element copied (`fork2` itself charges another 1, so don't count it twice).
 
-提示：對調兩個長方形的那個遞迴也要切半，不然 span 會是 `Θ(n)`。
+The tests turn the exercise's analysis into checks: they compare your exact work and your span against the bounds below, and a second stage adds rectangular, out-of-place transposes.
 
-## Stage 2 — 長方形、離位
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`transpose_copy(exec, src, rows, cols, dst, cutoff = 1)`：把 `rows × cols` 的 `src`（row-major）轉置到 `dst`（`cols × rows`，row-major）。遞迴切較長的那一邊，面積 `<= cutoff` 時用循序迴圈。Work 是 `rows*cols` + fork 次數；span 不超過 `4·(⌈lg rows⌉ + ⌈lg cols⌉) + 16`。
+## Stage 1 — In-place transpose
 
-## 面試追問
+```cpp
+template <typename Exec>
+void transpose_square(Exec& exec, std::span<int> grid, std::size_t n, std::size_t cutoff = 1);
+```
 
-1. 寫出 Stage 1 的 work 與 span 遞迴式並解出來（HW5 Write-up 5 要的就是這個）。對調長方形那一支的 span 是多少？
-2. 迴圈版（0501）與遞迴版的 work 相同，差別在哪？（提示：cache misses，HW8 會量）
-3. `cutoff` 選多少合理？跟 fork 成本和快取大小各有什麼關係？
+`transpose_square(exec, grid, n, cutoff = 1)`: `grid` is `n×n` and row-major (`grid.size() == n*n`). Subproblems with a side `<= cutoff` switch to a serial loop. With `n` = 0 or 1 the grid stays as it is.
+
+Requirements (with `cutoff = 1`):
+
+- The work is exactly "the number of swaps, `n(n-1)/2`, plus the number of forks."
+- The span is `O(lg n)`: the tests require at most `8·⌈lg n⌉ + 16`, and a parallelism (`work / span`) greater than `n/2`.
+
+Hint: the recursion that exchanges the two rectangles must also split in halves, or the span will be `Θ(n)`.
+
+## Stage 2 — Rectangular, out of place
+
+```cpp
+template <typename Exec>
+void transpose_copy(Exec& exec, std::span<const int> src, std::size_t rows, std::size_t cols,
+                    std::span<int> dst, std::size_t cutoff = 1);
+```
+
+`transpose_copy(exec, src, rows, cols, dst, cutoff = 1)`: transpose the `rows × cols` matrix `src` (row-major) into `dst` (`cols × rows`, row-major). Recursively split the longer side, and use a serial loop once the area is `<= cutoff`. The work is `rows*cols` plus the number of forks; the span is at most `4·(⌈lg rows⌉ + ⌈lg cols⌉) + 16`. Either dimension may be 0.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Write the work and span recurrences for Stage 1 and solve them (that's exactly what HW5 Write-up 5 asks for). What is the span of the branch that exchanges the rectangles?
+2. The loop version (0501) and the recursive version do the same work. What's the difference? (Hint: cache misses, which HW8 measures.)
+3. What's a reasonable `cutoff`? How does it relate to the fork cost and to the cache size?

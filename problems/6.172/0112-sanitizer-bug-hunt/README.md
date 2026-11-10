@@ -1,75 +1,187 @@
 ---
-title: Sanitizer 除錯與 Crash Triage
-unit: 01 · C++ 基本功與工具（HW1）
-source: 6.172 HW1 §5 Basic tools（Write-up 5–8）
+title: Sanitizer Debugging and Crash Triage
+unit: 01 · C++ Fundamentals and Tools (HW1)
+source: 6.172 HW1 §5 Basic tools (Write-up 5–8)
 pdf: materials/6.172/homework/hw01/handout.pdf
 read: materials/6.172/homework/hw01/handout.pdf
 kind: code
 minutes: 120
 ---
 
-# 0112 · Sanitizer 除錯與 Crash Triage
+# 0112 · Sanitizer Debugging and Crash Triage
 
-> **實務上為什麼會遇到**：CI 跑 fuzz 一個晚上吐出 300 份 ASan 報告，其實只有 3 個 bug。會看報告、會分類、會用 lldb 重現，是 C++ 工程師的基本生存技能。這題把 HW1 的 GDB／Valgrind 流程換成這台機器上真正有的工具。
+**Original problem:** [HW1: Basic Tools, C Primer](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/2724d8594cb413754669fc4e9c6ce7db_MIT6_172F18hw1.pdf) · **Read first:** [HW1: Basic Tools, C Primer](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/2724d8594cb413754669fc4e9c6ce7db_MIT6_172F18hw1.pdf)
 
-`support/planted_bugs.hpp` 有九個故意埋了 bug 的函式，都是常見手滑。先動手重現，再開始寫程式：
+> **Why this comes up in practice:** one night of fuzzing in CI spits out 300 ASan reports that turn out to be only 3 bugs. Reading reports, classifying them, and reproducing them in lldb are basic survival skills for a C++ engineer. This exercise swaps HW1's GDB/Valgrind workflow for the tools this machine actually has.
+
+## Original problem
+
+6.172 HW1 §5 ("Basic tools") debugs a deliberately broken C matrix-multiply program from the homework repository on Linux:
+
+- Build it with the provided Makefile, switch the optimization level from `-O1` to `-O3`, and rebuild. The program prints some output and then dies with a segmentation fault.
+- Run it under GDB (`run`, then `bt`). The optimized build only names the crashing function, so rebuild with `make DEBUG=1` (debug symbols, `-O0`), rerun, and print variables at the faulting line: a row of `B` is a null pointer, so the matrix dimensions are wrong.
+- Enable the commented-out `tbassert` dimension checks in `matrix_multiply.c`, rerun a debug build to get a readable assertion failure, and move to `main`'s stack frame with `frame` to print both dimensions. Then fix `testbed.c`, which builds the matrices, so that the program runs to completion.
+- The printed product (`-p`) is still wrong; `-pz` multiplies zero matrices for comparison. Build with `make ASAN=1` and run under AddressSanitizer. Then run Valgrind on a fresh build, which reports a use of an uninitialized value while the result matrix is printed; fix the missing initialization in `matrix_multiply.c`.
+- Valgrind's leak summary (use `--leak-check=full` for details) shows that matrices `A`, `B`, and `C` are never freed. Free them in `testbed.c` with `free_matrix` until Valgrind has nothing to report.
+- Finally, add `-fprofile-arcs` and `-ftest-coverage` to the build, run `llvm-cov gcov`, and read the per-line execution counts: they reveal lines the testbed never runs and the hot triple loop in `matrix_multiply_run`. Then take the flags out again, because the instrumentation slows the program down and skews every timing.
+
+The write-ups:
+
+- **Write-up 5:** what `make clean; make` shows once the Makefile uses `-O3`.
+- **Write-up 6:** the AddressSanitizer output about the memory bug.
+- **Write-up 7:** the output of `./matrix_multiply -p` after the initialization fix, showing a correct product.
+- **Write-up 8:** Valgrind output showing that no errors remain.
+
+## Your task
+
+`support/planted_bugs.hpp` has nine functions with deliberately planted bugs, all of them common slips. Reproduce them by hand before you start writing code:
 
 ```bash
 D=problems/6.172/0112-sanitizer-bug-hunt
 clang++ -std=c++20 -g -O0 -fsanitize=address,undefined -fno-sanitize-recover=undefined \
   -fno-omit-frame-pointer -I$D/support $D/lab/bugzoo.cpp -o /tmp/bugzoo
-/tmp/bugzoo use-after-realloc      # 讀 ASan 報告：哪種錯、哪一行、誰 free 的
+/tmp/bugzoo use-after-realloc      # read the ASan report: what kind of error, which line, who freed it
 lldb -- /tmp/bugzoo overflow       # r, bt, frame select, frame variable, p, breakpoint set -n
-leaks --atExit -- /tmp/bugzoo leak # Apple Silicon 沒有 LeakSanitizer，leak 要靠 leaks
+leaks --atExit -- /tmp/bugzoo leak # Apple Silicon has no LeakSanitizer; find leaks with the leaks tool
 ```
 
-每個 scenario 都跑一次，把報告讀懂。注意工具的盲區：沒初始化的讀取 ASan 抓不到（要 MSan，macOS 沒有），所以養成用 RAII 和 `{}` 初始化的習慣；記憶體洩漏這台機器上要靠 `leaks`。
+Run every scenario once and make sense of its report. Mind the tools' blind spots: ASan can't catch reads of uninitialized memory (that takes MSan, which macOS doesn't have), so make a habit of RAII and `{}` initialization; on this machine, memory leaks have to be found with `leaks`.
 
-## Stage 1 — 解析報告
+Where the original walks one broken C program through GDB, Valgrind, and gcov, this exercise has you build the triage tooling itself: parse sanitizer reports, run code in a child process and capture its stderr, classify the planted bugs live, fix them, and group duplicate crashes.
 
-`SanitizerReport parse_report(std::string_view log)`，只看 `log` 裡**第一份**報告：
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-| 欄位 | 內容 |
+## Stage 1 — Parsing a report
+
+```cpp
+enum class BugClass {
+    None,
+    Unknown,
+    HeapUseAfterFree,
+    HeapBufferOverflow,
+    StackBufferOverflow,
+    DoubleFree,
+    SignedIntegerOverflow,
+    ShiftOutOfRange,
+    MisalignedAccess,
+    NullDereference,
+    OutOfBoundsIndex,
+};
+
+struct SanitizerReport {
+    BugClass bug = BugClass::None;
+    std::string tool;
+    std::string access;
+    std::size_t access_size = 0;
+    std::string top_frame;
+    std::string location;
+};
+
+SanitizerReport parse_report(std::string_view log);
+```
+
+`SanitizerReport parse_report(std::string_view log)` looks only at the **first** report in `log`:
+
+| Field | Contents |
 | --- | --- |
-| `bug` | `BugClass`，見下表，看不出來是 `Unknown`；完全沒有報告是 `None` |
-| `tool` | `"AddressSanitizer"` 或 `"UndefinedBehaviorSanitizer"`，沒有報告時為空字串 |
-| `access` / `access_size` | ASan 的 `READ of size 4`、`WRITE of size 1`；沒有時為 `""` / `0` |
-| `top_frame` | ASan 第一個「有 `file:line` 位置」的 stack frame 的函式名（跳過 `__asan_memcpy`、runtime 內部 frame）；UBSan 報告為空字串 |
-| `location` | `"檔名:行號"`，去掉目錄和欄號。ASan 用同一個 frame；UBSan 用開頭的位置 |
+| `bug` | A `BugClass` (see the table below); `Unknown` if you can't tell, and `None` if there is no report at all |
+| `tool` | `"AddressSanitizer"` or `"UndefinedBehaviorSanitizer"`; an empty string when there is no report |
+| `access` / `access_size` | ASan's `READ of size 4` or `WRITE of size 1`; `""` / `0` when there is none |
+| `top_frame` | The function name of ASan's first stack frame that "has a `file:line` location" (skip `__asan_memcpy` and the runtime's internal frames); an empty string for UBSan reports |
+| `location` | `"file:line"`, without the directory or the column. ASan uses the same frame; UBSan uses the location at the start of the report |
 
-| 報告內容（節錄） | `BugClass` |
+| Report text (excerpt) | `BugClass` |
 | --- | --- |
 | ASan `heap-use-after-free` / `heap-buffer-overflow` / `stack-buffer-overflow` | `HeapUseAfterFree` / `HeapBufferOverflow` / `StackBufferOverflow` |
 | ASan `attempting double-free` | `DoubleFree` |
-| ASan `SEGV on unknown address`，位址 `< 4096` | `NullDereference`（否則 `Unknown`） |
+| ASan `SEGV on unknown address`, address `< 4096` | `NullDereference` (otherwise `Unknown`) |
 | UBSan `signed integer overflow` | `SignedIntegerOverflow` |
-| UBSan `shift exponent`、`left shift of`、`right shift of` | `ShiftOutOfRange` |
+| UBSan `shift exponent`, `left shift of`, `right shift of` | `ShiftOutOfRange` |
 | UBSan `misaligned address` | `MisalignedAccess` |
-| UBSan 含 `null pointer` | `NullDereference` |
+| UBSan containing `null pointer` | `NullDereference` |
 | UBSan `out of bounds` | `OutOfBoundsIndex` |
 
-## Stage 2 — 在子行程跑一段程式並攔截 stderr
+## Stage 2 — Running code in a child process and capturing stderr
 
-`CaptureResult capture_stderr(std::function<void()> fn)`：用 `fork` 跑 `fn`，回傳 `{exit_code, signal, output}`。
+```cpp
+struct CaptureResult {
+    int exit_code = 0;
+    int signal = 0;
+    std::string output;
+};
 
-- 正常回傳（`fn` 回傳）視為 exit code 0；被 signal 終止時 `exit_code == -1`、`signal` 為訊號編號。
-- `fn` 丟出例外時子行程 exit code 為 1，**不可**讓例外往上傳到父行程的測試流程（`fork` 之後要 `_exit`）。
-- `output` 是子行程寫到 stderr（fd 2）的全部內容。輸出可能很長，超過 pipe 緩衝區也不可以死結。
+CaptureResult capture_stderr(std::function<void()> fn);
+```
 
-## Stage 3 — 現場分類
+`CaptureResult capture_stderr(std::function<void()> fn)`: run `fn` in a child created with `fork`, and return `{exit_code, signal, output}`.
 
-`SanitizerReport triage(std::function<void()> fn)`：在子行程跑 `fn`，解析它的報告。測試會真的讓九個 planted bug 爆在 ASan/UBSan 底下。沒有錯誤就回傳 `BugClass::None`。
+- A normal return (`fn` returns) counts as exit code 0; when a signal kills the child, `exit_code == -1` and `signal` is the signal number.
+- When `fn` throws, the child's exit code is 1, and you **must not** let the exception propagate up into the parent's test flow (the child must `_exit` after `fork`).
+- `output` is everything the child wrote to stderr (fd 2). The output can be long; even when it exceeds the pipe buffer, you must not deadlock.
 
-## Stage 4 — 修 bug
+## Stage 3 — Live triage
 
-寫修正版，同樣的輸入不可以再踩到 sanitizer（`solution.hpp` 有宣告）：`first_after_push`、`clone_prefix`（`std::unique_ptr<int[]>`）、`copy_truncated`（截斷複製，總是 NUL 結尾，回傳完整長度，`strlcpy` 語意）、`OwnedBuffer`（deep copy 的 rule of three）、`sum_wide`、`low_bits_mask_safe`（`count` 可為 0～32）、`read_u32_safe`、`second_value_safe`、`record_bucket_safe`（越界丟 `std::out_of_range`）。
+```cpp
+SanitizerReport triage(std::function<void()> fn);
+```
 
-## Stage 5 — 實務延伸：Crash 分組
+`SanitizerReport triage(std::function<void()> fn)`: run `fn` in a child process and parse its report. The tests really do set off the nine planted bugs under ASan/UBSan. When there is no error, return `BugClass::None`.
 
-`group_reports(std::span<const std::string> logs)`：把多份報告分組，以 `(bug, top_frame, location)` 為 key，回傳 `CrashGroup{report, count}`（`report` 為該組第一份），依 `count` 由大到小，同數再依 `location` 字典序。報告內容無法解析（`None`）的略過。
+## Stage 4 — Fixing the bugs
 
-## 面試追問
+```cpp
+int first_after_push(std::vector<int>& values, int extra);
+std::unique_ptr<int[]> clone_prefix(const int* src, std::size_t n);
+std::size_t copy_truncated(const char* text, std::span<char> out);
 
-1. 為什麼 ASan 抓不到讀到未初始化的記憶體？它的 shadow memory 只記錄了什麼？
-2. Debug build（`-O0`）常常掩蓋 bug，有些 bug 只在 `-O2` 才現形。舉一個例子。
-3. HW1 手動做的 code coverage（gcov）在什麼時候比 sanitizer 更有用？
+class OwnedBuffer {
+public:
+    explicit OwnedBuffer(std::size_t n);
+    ~OwnedBuffer();
+    OwnedBuffer(const OwnedBuffer& other);
+    OwnedBuffer& operator=(const OwnedBuffer& other);
+
+    int* data();
+    const int* data() const;
+    std::size_t size() const;
+};
+
+long long sum_wide(const std::vector<int>& values);
+std::uint32_t low_bits_mask_safe(int count);
+std::uint32_t read_u32_safe(const std::uint8_t* buffer, std::size_t offset);
+std::optional<int> second_value_safe(const planted::ListNode* head);
+void record_bucket_safe(std::span<int> counts, int bucket);
+```
+
+Write the corrected versions; the same inputs must no longer trip a sanitizer (they are declared in `solution.hpp`):
+
+- `first_after_push` (push `extra`, then return the old first element plus `extra`)
+- `clone_prefix` (`std::unique_ptr<int[]>`; non-null even when `n == 0`)
+- `copy_truncated` (a truncating copy that is always NUL-terminated and returns the full length, with `strlcpy` semantics; an empty `out` gets nothing written)
+- `OwnedBuffer` (the rule of three with a deep copy; new elements start at 0, and self-assignment must be safe)
+- `sum_wide` (the sum as a `long long`)
+- `low_bits_mask_safe` (`count` can be anywhere from 0 to 32)
+- `read_u32_safe`
+- `second_value_safe` (returns `std::nullopt` when the list has fewer than two nodes, including when `head` is `nullptr`)
+- `record_bucket_safe` (adds 1 to `counts[bucket]`; throws `std::out_of_range` when the bucket is out of bounds, leaving `counts` unchanged)
+
+## Stage 5 — Real-world extension: Crash grouping
+
+```cpp
+struct CrashGroup {
+    SanitizerReport report;
+    std::size_t count = 0;
+};
+
+std::vector<CrashGroup> group_reports(std::span<const std::string> logs);
+```
+
+`group_reports(std::span<const std::string> logs)`: group the reports by the key `(bug, top_frame, location)` and return `CrashGroup{report, count}` entries (`report` is the group's first report), sorted by `count` from largest to smallest, with ties broken by `location` in lexicographic order. Skip logs that don't parse into a report (`None`).
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why can't ASan catch a read of uninitialized memory? What is the only thing its shadow memory records?
+2. A debug build (`-O0`) often hides bugs, and some bugs only show up at `-O2`. Give an example.
+3. When is the code coverage (gcov) that HW1 has you do by hand more useful than a sanitizer?

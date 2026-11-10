@@ -1,6 +1,6 @@
 ---
-title: DAG 路徑計數與同餘（狀態擴充）
-unit: 07 · Dynamic Programming I（PS7）
+title: DAG Path Counting and Residues (state augmentation)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 PS7 Problem 7-3
 pdf: materials/6.006/psets/ps7/questions.pdf
 answer: materials/6.006/psets/ps7/solutions.pdf
@@ -9,51 +9,84 @@ kind: code
 minutes: 70
 ---
 
-# 0713 · DAG 路徑計數與同餘
+# 0713 · DAG Path Counting and Residues
 
-> **實務上為什麼會遇到**：數位電路的靜態時序分析要知道一條 timing path 經過奇數或偶數個 inverter（訊號有沒有反相）；build graph、workflow engine 也常要統計滿足某種條件的路徑。路徑可能有指數多條，絕對不能列舉，但「模 k 的餘數」只有 k 種，把它塞進狀態就好。
+**Original problem:** [Problem Set 7 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/3dff7a1ecbc241e9b91b48e69a1588d4_MIT6_006S20_ps7_questions.pdf) · **Read first:** [Lecture 15: Dynamic Programming, Part 1: SRBOT, Fib, DAGs, Bowling notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/9eb3e9a51a7b5b60b0f67c2277f8b0ee_MIT6_006S20_lec15.pdf)
 
-圖是 weighted directed graph，邊用 adjacency list 表示：
+> **Why this comes up in practice:** static timing analysis of a digital circuit needs to know whether a timing path passes through an odd or an even number of inverters (whether the signal ends up inverted), and build graphs and workflow engines often need to count the paths that satisfy some condition. There can be exponentially many paths, so you must never list them, but there are only k possible "residues mod k", so just put the residue into the state.
+
+## Original problem
+
+6.006 PS7 Problem 7-3 gives a weighted directed acyclic graph G = (V, E, w) with integer edge weights and two vertices s, t ∈ V. It asks for a linear-time algorithm that counts how many paths from s to t have an odd total weight. You may assume that every integer the algorithm computes fits in a single machine word. As with every PS7 problem, the solution must be a dynamic program presented through the SRT BOT steps.
+
+## Your task
+
+The graph is a weighted directed graph, with its edges stored as adjacency lists:
 
 ```cpp
 struct Edge { int to; int weight; };          // weight may be negative
 using Graph = std::vector<std::vector<Edge>>; // graph[v] lists edges out of v
 ```
 
-路徑的 weight 是所有邊的總和，平行邊算不同路徑，`source == target` 時長度 0 的空路徑算一條（weight 0）。路徑數超過 2⁶⁴ 時以 `std::uint64_t` 的 wrap-around 語意計算（照常寫就好）。
+A path's weight is the sum of all its edges. Parallel edges count as different paths, and when `source == target`, the empty path of length 0 counts as one path (with weight 0). When the number of paths exceeds 2⁶⁴, count with the wrap-around semantics of `std::uint64_t` (just write the code normally).
 
-所有函式都要符合：
+Every function must satisfy these rules:
 
-- 圖只要有 cycle（包含從 `source` 到不了的部分）就丟 `std::invalid_argument`。
-- `source`、`target` 不在範圍內時丟 `std::out_of_range`。
-- 頂點編號不保證是 topological order，整體時間要線性（`|V| + |E|`，以下乘上餘數個數）。
-- 不可遞迴：測試有數十萬節點的長鏈。
+- If the graph has any cycle at all (including in parts that `source` can't reach), throw `std::invalid_argument`.
+- If `source` or `target` is out of range, throw `std::out_of_range`.
+- Vertex numbers are not guaranteed to be in topological order, and the total time must be linear (`|V| + |E|`, times the number of residues in the stages below).
+- Do not use recursion: the tests include long chains of hundreds of thousands of vertices.
 
-一次只看一關，做完再往下讀。
+The original promises a DAG and asks only for the number of odd-weight paths. Here you must reject cycles yourself; you count all paths, then split the count by parity and by any modulus, and finally return one path with a given residue.
 
-## Stage 1 — 路徑數
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`std::uint64_t count_paths(const Graph& graph, int source, int target)`。
+Read one stage at a time, and finish it before reading on.
 
-## Stage 2 — 奇偶
+## Stage 1 — Number of paths
+
+```cpp
+std::uint64_t count_paths(const Graph& graph, int source, int target);
+```
+
+`std::uint64_t count_paths(const Graph& graph, int source, int target)`.
+
+## Stage 2 — Parity
 
 ```cpp
 struct ParityCounts { std::uint64_t even; std::uint64_t odd; };
 ParityCounts count_paths_by_parity(const Graph& graph, int source, int target);
 ```
 
-Weight 可以是負數，判斷奇偶時要小心。
+Weights can be negative, so be careful when deciding parity.
 
-## Stage 3 — 任意模數
+## Stage 3 — Any modulus
 
-`std::vector<std::uint64_t> count_paths_by_residue(const Graph& graph, int source, int target, int modulus)`：回傳大小為 `modulus` 的 vector，第 `r` 格是 weight 同餘 `r`（模 `modulus`，正規化到 `[0, modulus)`）的路徑數。`modulus < 1` 時丟 `std::invalid_argument`。O(modulus · (|V| + |E|))。
+```cpp
+std::vector<std::uint64_t> count_paths_by_residue(const Graph& graph, int source, int target,
+                                                  int modulus);
+```
 
-## Stage 4 — 實務延伸：找一條符合條件的路徑
+`std::vector<std::uint64_t> count_paths_by_residue(const Graph& graph, int source, int target, int modulus)`: return a vector of size `modulus` whose entry `r` is the number of paths with weight congruent to `r` (modulo `modulus`, normalized to `[0, modulus)`). Throw `std::invalid_argument` when `modulus < 1`. O(modulus · (|V| + |E|)).
 
-`std::optional<std::vector<int>> find_path_with_residue(graph, source, target, modulus, residue)`：回傳任一條 weight 同餘 `residue` 的路徑（頂點序列，含兩端），沒有時回傳 `std::nullopt`。錯誤處理與前面相同。
+## Stage 4 — Real-world extension: finding a path that meets the condition
 
-## 面試追問
+```cpp
+std::optional<std::vector<int>> find_path_with_residue(const Graph& graph, int source,
+                                                       int target, int modulus,
+                                                       int residue);
+```
 
-1. 把 weight 換成 parity 之後狀態數只多一倍。這招什麼時候會讓狀態爆炸？（例如換成「總和剛好是 W」）
-2. 為什麼 C++ 的 `%` 在負數上會把 parity 判斷搞錯？`x & 1` 在什麼前提下才正確？
-3. 真的需要路徑數超過 64 bit 的精確值時，時間複雜度要怎麼重算（word RAM 的前提變了）？
+`std::optional<std::vector<int>> find_path_with_residue(graph, source, target, modulus, residue)`: return any path whose weight is congruent to `residue` (as a sequence of vertices, including both ends), or `std::nullopt` if there is none. Error handling is the same as before.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Replacing the weight with its parity only doubles the number of states. When does this trick make the number of states explode? (For example, "the total is exactly W".)
+2. Why does C++'s `%` get the parity wrong on negative numbers? Under what assumption is `x & 1` correct?
+3. If you really need exact path counts beyond 64 bits, how do you redo the time analysis (the word-RAM assumption has changed)?
+
+---
+
+**Official solution:** [Problem Set 7 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ed996e1569867432dc1fbdeae53e309f_MIT6_006S20_ps7_solutions.pdf). Read it after you finish.

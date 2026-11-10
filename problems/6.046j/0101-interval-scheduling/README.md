@@ -1,6 +1,6 @@
 ---
-title: Interval Scheduling（Greedy 與 Weighted DP）
-unit: 01 · Scheduling 與 Divide & Conquer（PS1）
+title: Interval Scheduling (greedy and weighted DP)
+unit: 01 · Scheduling and Divide & Conquer (PS1)
 source: 6.046J Lecture 1, Recitation 1
 pdf: materials/6.046j/lectures/lec01.pdf
 read: materials/6.046j/lectures/lec01.pdf, materials/6.046j/recitations/rec01.pdf
@@ -10,37 +10,77 @@ minutes: 75
 
 # 0101 · Interval Scheduling
 
-> **實務上為什麼會遇到**：GPU 叢集、會議室、廣告版位的預約系統，都要回答「單一資源上最多接幾筆單」或「接哪些單營收最高」。只差一個權重，能用的演算法就從 greedy 換成 DP。
+**Based on:** [Overview, Interval Scheduling](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ff2a7015ff913fc01f0381d8f5126a9a_MIT6_046JS15_lec01.pdf) · **Read first:** [Overview, Interval Scheduling](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ff2a7015ff913fc01f0381d8f5126a9a_MIT6_046JS15_lec01.pdf), [Divide & Conquer: Smarter Interval Scheduling, Master Theorem, Strassen’s Algorithm](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/7c15f31b5a1aa1991313d1b4544cc137_MIT6_046JS15_Recitation1.pdf)
 
-每筆請求佔用半開區間 `[start, finish)`，`value` 是接下這筆的收益。兩筆請求相容的條件是 `a.finish <= b.start` 或 `b.finish <= a.start`，所以只有端點相碰的兩筆可以同時接。
+> **Why this comes up in practice:** booking systems for GPU clusters, meeting rooms, and ad slots all have to answer either "how many orders can one resource take at most?" or "which orders bring in the most revenue?" The two questions differ by a single weight, yet that weight moves the usable algorithm from greedy to DP.
 
-合法輸入是 `start < finish` 且 `value >= 0`，否則丟 `std::invalid_argument`。所有回傳的請求編號都依開始時間遞增。最佳解不唯一時，回傳任何一組都算對。
+## Your task
 
-## Stage 1 — 最多接幾筆
+Each request occupies the half-open interval `[start, finish)`, and `value` is the revenue from accepting it. Two requests are compatible when `a.finish <= b.start` or `b.finish <= a.start`, so two requests that only touch at an endpoint can both be accepted.
 
-`max_compatible(requests)`：回傳數量最多的相容子集，忽略 `value`。O(n log n)。
+Valid input has `start < finish` and `value >= 0`; otherwise throw `std::invalid_argument`. Every list of request indices you return is in increasing order of start time. When there are several optimal answers, any one of them is accepted.
 
-Lecture 1 列了四條 greedy 規則，只有一條是對的。先想清楚另外三條的反例再動手，測試會全部驗。
+You implement the greedy from Lecture 1 for the unweighted problem and a DP for the weighted one, then build a planner on top of the DP that answers what-if questions.
 
-## Stage 2 — 收益最高
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-`max_value_schedule(requests)`：回傳總收益最高的相容子集，`total` 是收益總和，`chosen` 是選到的請求。O(n log n)，所以對每筆請求找「前一個相容的位置」時要用二分搜，不是線性掃。
+## Stage 1 — The most requests
 
-總收益會用 `int64` 存，輸入保證不會溢位。
+```cpp
+struct Request {
+    std::int64_t start;
+    std::int64_t finish;
+    std::int64_t value;
+};
 
-## Stage 3 — 實務延伸：接單的機會成本
+std::vector<int> max_compatible(std::span<const Request> requests);
+```
 
-業務問：「這筆 VIP 單一定要接的話，總收益會變多少？」做一個 `WhatIfPlanner`：
+`max_compatible(requests)`: return a compatible subset with as many requests as possible, ignoring `value`. O(n log n).
 
-| 操作 | 行為 | 複雜度 |
+Lecture 1 lists four greedy rules, and only one of them is correct. Work out a counterexample for each of the other three before you start; the tests check all of them.
+
+## Stage 2 — The highest revenue
+
+```cpp
+struct Schedule {
+    std::int64_t total = 0;
+    std::vector<int> chosen;
+};
+
+Schedule max_value_schedule(std::span<const Request> requests);
+```
+
+`max_value_schedule(requests)`: return the compatible subset with the highest total revenue, where `total` is the sum of the values and `chosen` holds the selected requests. It must run in O(n log n), so finding the "previous compatible position" for each request must use binary search, not a linear scan.
+
+The total is stored as an `int64`, and the input is guaranteed not to overflow it.
+
+## Stage 3 — Real-world extension: the opportunity cost of an order
+
+```cpp
+class WhatIfPlanner {
+public:
+    explicit WhatIfPlanner(std::span<const Request> requests);
+
+    std::int64_t best_total() const;
+    std::int64_t best_with(std::size_t index) const;
+    std::int64_t regret(std::size_t index) const;
+};
+```
+
+Sales asks: "If we have to accept this VIP order, what does the total revenue become?" Build a `WhatIfPlanner`:
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `WhatIfPlanner(requests)` | 預處理；建構完之後不得再依賴傳入的 `span` | O(n log n) |
-| `best_total()` | 不強制接任何單時的最高收益 | O(1) |
-| `best_with(i)` | 強制接下第 `i` 筆時的最高收益；`i` 超出範圍時丟 `std::out_of_range` | O(log n) |
+| `WhatIfPlanner(requests)` | Preprocess; after construction it must not depend on the `span` passed in | O(n log n) |
+| `best_total()` | The highest revenue when no order is forced | O(1) |
+| `best_with(i)` | The highest revenue when request `i` is forced in; throw `std::out_of_range` if `i` is out of range | O(log n) |
 | `regret(i)` | `best_total() - best_with(i)` | O(log n) |
 
-## 面試追問
+## Interview follow-ups
 
-1. 用 exchange argument 說明為什麼 earliest finish time 的 greedy 是最佳的，另外三條規則各舉一個反例。
-2. Weighted 版本為什麼 greedy 就不行了？把 DP 的子問題定義和轉移講清楚，並說明回溯時為什麼選到的區間自動依開始時間排好。
-3. 如果資源從一台變成 `m` 台不同機型，每筆請求只能跑在部分機型上，這題會變成什麼複雜度類別？實務上你會怎麼處理？
+Once you're done, answer without looking at your code:
+
+1. Use an exchange argument to explain why the earliest-finish-time greedy is optimal, and give a counterexample for each of the other three rules.
+2. Why does greedy fail for the weighted version? Spell out the DP's subproblem definition and transition, and explain why the intervals you recover by backtracking come out already sorted by start time.
+3. If the single resource becomes `m` machines of different types, and each request can run only on some of them, what complexity class does the problem fall into? How would you handle it in practice?

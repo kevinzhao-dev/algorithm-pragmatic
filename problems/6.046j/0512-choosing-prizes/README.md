@@ -1,6 +1,6 @@
 ---
-title: Release Planning（四種帶限制的挑選 DP）
-unit: 05 · Skip Lists、Hashing 與 DP（PS5）
+title: Release Planning (four constrained selection DPs)
+unit: 05 · Skip Lists, Hashing, and DP (PS5)
 source: 6.046J PS5 Problem 5-2
 pdf: materials/6.046j/psets/ps05/questions.pdf
 answer: materials/6.046j/psets/ps05/solutions.pdf
@@ -11,39 +11,89 @@ minutes: 180
 
 # 0512 · Release Planning
 
-> **實務上為什麼會遇到**：一次發版最多能上 `m` 項變更，每項有不同收益，但上線順序和相依關係會限制哪些組合可行。同樣的預算問題換幾個限制，適用的演算法就完全不同。
+**Original problem:** [Problem Set 5](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/45952953cb13d077bd35d4397d67fa7c_MIT6_046JS15_pset5.pdf) · **Read first:** [Overview, Interval Scheduling](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/ff2a7015ff913fc01f0381d8f5126a9a_MIT6_046JS15_lec01.pdf), [Divide & Conquer: Convex Hull, Median Finding](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/7463c413c944ed72b46a3c3d02b49448_MIT6_046JS15_lec02.pdf)
 
-每項變更的收益是非負整數，有負值時丟 `std::invalid_argument`。「最多選 `m` 項」，`m` 可以是 0，也可以大於項目數。每個函式都回傳**遞增排序**的索引，最佳解不唯一時回傳任一組，總收益要最大。
+> **Why this comes up in practice:** a release can ship at most `m` changes, each with a different payoff, but rollout order and dependencies limit which combinations are feasible. Change a few constraints on the same budget problem, and the algorithm that applies is completely different.
 
-## Stage 1 — 沒有限制
+## Original problem
 
-`pick_top(values, m)`：挑收益最高的最多 `m` 項。O(n) 或 O(n log m)，不要把整個陣列排序後再排回原順序。
+6.046J PS5 Problem 5-2 ("Choosing Prizes") offers n prizes, of which you may take at most m, where m < n. Every prize p has a nonnegative integer value, p.value, and you want the chosen prizes to be worth as much as possible in total. Each part below is a variant: for each one, give an efficient algorithm and analyze how much time and space it needs. In parts (a)–(c) the prizes arrive as a sequence P = ⟨p1, p2, ..., pn⟩, and the answer must be a subsequence S of P, that is, the chosen prizes in their order in P.
 
-## Stage 2 — 先遷移，後上線
+- (a) Find a subsequence S = ⟨s1, s2, ...⟩ of P with at most m elements that maximizes Σ_j s_j.value, and analyze the algorithm in terms of n and m.
+- (b) Each prize now also has a type, A or B, given by p.type. Maximize the same sum subject to one more rule: within S, every type-A prize comes before every type-B prize. Analyze it in terms of n and m.
+- (c) Back to a single type, but now the values of the prizes in S must be non-decreasing. Maximize the same sum and analyze it in terms of n and m.
+- (d) The prizes now hang on a rooted binary tree T with root r, one prize u.prize per vertex u, and each prize again has a nonnegative integer value. Find a set S of at most m prizes with the largest total value such that, whenever S contains the prize of a non-root vertex u, it also contains the prize at u.parent. In other words, the chosen vertices form a connected subtree of T that contains r.
 
-`pick_a_then_b(prizes, m)`：`type` 只會是 `'A'`（schema 遷移）或 `'B'`（服務上線），其他值丟 `std::invalid_argument`。在選出的項目中，所有 `A` 都必須排在所有 `B` 之前（依原本的索引順序）。O(nm) 時間。
+## Your task
 
-子問題要分兩種狀態：還只在選 `A`，或已經可以選 `B`。回傳實際的選擇，要記錄足夠的資訊才能回溯。
+Each change's payoff is a non-negative integer; throw `std::invalid_argument` if any is negative. "Choose at most `m` items", where `m` may be 0 and may also exceed the number of items. Every function returns indices **sorted in increasing order**; when there are several optimal answers, return any one of them, as long as the total payoff is the maximum.
 
-## Stage 3 — 影響範圍只能變大
+Stages 1 to 4 are parts (a) to (d), recast as release planning: prizes become changes, type A is a schema migration, and type B is a service launch. Unlike the original, you return the actual selection, and Stage 5 then tightens the running times of Stages 3 and 4.
 
-`pick_non_decreasing(values, m)`：選出的項目，收益依索引順序必須**非遞減**。這一關先求對，任何多項式時間都接受，Stage 5 才要求效能。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 4 — 功能相依
+## Stage 1 — No constraints
 
-`pick_rooted_subtree(tree, root, m)`：`tree` 是二元樹，`tree[u].left`、`right` 是子節點索引，沒有時是 `-1`。除了 `root`，選了某個節點就必須也選它的父節點，也就是選出的節點要是包含 `root` 的連通子樹（或者完全不選）。
+```cpp
+std::vector<int> pick_top(std::span<const std::int64_t> values, std::size_t m);
+```
 
-空樹回傳空，此時 `root` 不看。樹非空且 `root` 超出範圍時丟 `std::invalid_argument`。可能是五十萬個節點的一條長鏈，不可以遞迴。
+`pick_top(values, m)`: pick at most `m` items with the highest payoffs, in O(n) or O(n log m). Don't sort the whole array and then sort the result back into the original order.
 
-## Stage 5 — 壓低複雜度
+## Stage 2 — Migrate first, launch later
 
-沒有新的介面，只有 `PERF` 測試：
+```cpp
+struct Prize {
+    std::int64_t value;
+    char type;
+};
 
-- `pick_non_decreasing` 要 **O(nm log n)**。對固定長度，「結尾值不超過 `x` 的最佳總和」是個前綴最大值查詢。
-- `pick_rooted_subtree` 要 **O(nm)**。每個節點的表只需要 `min(子樹大小, m) + 1` 項，合併兩個子節點的成本是兩張表長度的乘積。
+std::vector<int> pick_a_then_b(std::span<const Prize> prizes, std::size_t m);
+```
 
-## 面試追問
+`pick_a_then_b(prizes, m)`: `type` is only ever `'A'` (a schema migration) or `'B'` (a service launch); throw `std::invalid_argument` for any other value. Among the chosen items, every `A` must come before every `B` (in original index order). O(nm) time.
 
-1. Stage 2 的兩個狀態為什麼夠用？如果類型順序變成 `A < B < C`，或者要交替出現，狀態要怎麼擴充？
-2. 為什麼 Stage 5 的樹上合併加總起來只有 O(nm)，而不是 O(nm²)？（把每次乘積想成在數一對節點。）
-3. Stage 3 的 DP 要保留回溯資訊時，空間成本是多少？只要總和不要選擇時可以省到多少？
+Split the subproblems into two states: still choosing only `A`s, or already allowed to choose `B`s. You return the actual selection, so record enough information to backtrack.
+
+## Stage 3 — Impact can only grow
+
+```cpp
+std::vector<int> pick_non_decreasing(std::span<const std::int64_t> values, std::size_t m);
+```
+
+`pick_non_decreasing(values, m)`: the payoffs of the chosen items, in index order, must be **non-decreasing**. In this stage you only need to be correct, and any polynomial running time is accepted; the performance requirement comes in Stage 5.
+
+## Stage 4 — Feature dependencies
+
+```cpp
+struct TreePrize {
+    std::int64_t value;
+    int left;
+    int right;
+};
+
+std::vector<int> pick_rooted_subtree(std::span<const TreePrize> tree, int root, std::size_t m);
+```
+
+`pick_rooted_subtree(tree, root, m)`: `tree` is a binary tree in which `tree[u].left` and `right` are the indices of the children, or `-1` when a child is absent. For every node except `root`, choosing the node means you must also choose its parent; that is, the chosen nodes must form a connected subtree that contains `root` (or be empty).
+
+An empty tree returns an empty result, and `root` is ignored in that case. Throw `std::invalid_argument` if the tree is non-empty and `root` is out of range. The input may be a single chain of 500,000 nodes, so you must not recurse.
+
+## Stage 5 — Lowering the complexity
+
+There is no new interface, only `PERF` tests:
+
+- `pick_non_decreasing` must run in **O(nm log n)**. For a fixed length, "the best sum whose last value is at most `x`" is a prefix-maximum query.
+- `pick_rooted_subtree` must run in **O(nm)**. Each node's table needs only `min(subtree_size, m) + 1` entries, and merging two children costs the product of the two tables' lengths.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why are two states enough in Stage 2? If the type order became `A < B < C`, or the types had to alternate, how would you extend the states?
+2. Why do the tree merges in Stage 5 add up to only O(nm) rather than O(nm²)? (Think of each product as counting pairs of nodes.)
+3. What is the space cost of the Stage 3 DP when it keeps backtracking information? How far can you cut it if you only need the total and not the selection?
+
+---
+
+**Official solution:** [Solutions to Problem Set 5](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/bbcc32bdd480116ca12b065cf6d6c454_MIT6_046JS15_pset5sols.pdf). Read it after you finish.

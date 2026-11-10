@@ -1,7 +1,7 @@
 ---
-title: 平行 Quicksort 與 Race 修復
-unit: 05 · Fork-Join 與 Reducer（HW4）
-source: 6.172 HW4 §2.2–2.3（Checkoff 4–5）
+title: Parallel Quicksort and Fixing a Race
+unit: 05 · Fork-Join and Reducers (HW4)
+source: 6.172 HW4 §2.2–2.3 (Checkoff 4–5)
 pdf: materials/6.172/homework/hw04/handout.pdf
 read: materials/6.172/lectures/lec07.pdf
 kind: code
@@ -9,11 +9,29 @@ sanitizer: tsan
 minutes: 100
 ---
 
-# 0511 · 平行 Quicksort 與 Race 修復
+# 0511 · Parallel Quicksort and Fixing a Race
 
-> **實務上為什麼會遇到**：幾乎所有手刻的平行演算法第一版都有 determinacy race，而且大部分時候「看起來會動」。會用 ThreadSanitizer、看懂報告、指出是哪兩個存取打架，比背任何 lock 的 API 都重要。
+**Original problem:** [HW4: Cilk, Reducer Hyperobjects](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/b2ff5659ae776c6fa6834967f73a2ab4_MIT6_172F18hw4.pdf) · **Read first:** [Races and Parallelism](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/543e419bff1ed05b1a649115c24c44b3_MIT6_172F18_lec7.pdf)
 
-先看 race：
+> **Why this comes up in practice:** almost every first version of a hand-rolled parallel algorithm has a determinacy race, and most of the time it "seems to work." Being able to use ThreadSanitizer, read its report, and point out which two accesses collide matters more than memorizing any lock API.
+
+## Original problem
+
+6.172 HW4 §2.2–2.3 continue the Cilk recitation with two tools:
+
+- §2.2, the Cilksan race detector: a quicksort was parallelized naively by adding `cilk_spawn` and `cilk_sync` to a serial version, and it has a determinacy race that test runs rarely expose. Built with Cilksan, which reports the source lines of the two conflicting memory accesses (often a read and a write), it shows the race on an input of just 10 elements.
+- §2.3, the Cilkscale scalability analyzer: a second parallel quicksort should have no races (check with Cilksan). Built with Cilkscale, it reports work and span from measured cycle counts, and the parallelism they imply.
+
+The checkoff items:
+
+- **Checkoff Item 4:** find the race with Cilksan, fix it, and confirm with Cilksan that no races remain. Report the line numbers of the racing read and write, and briefly explain what causes the race.
+- **Checkoff Item 5:** report the parallelism that Cilkscale computes for the race-free quicksort on a few input sizes.
+
+The original is C with Cilk.
+
+## Your task
+
+Look at the race first:
 
 ```bash
 D=problems/6.172/0511-parallel-quicksort
@@ -22,26 +40,49 @@ clang++ -std=c++20 -g -O1 -fsanitize=thread -fno-omit-frame-pointer \
 /tmp/race_lab 2>&1 | head -30
 ```
 
-讀 TSan 報告（有 race 的程式之後常常直接 crash，那是 race 的後果，報告已經足夠）：哪兩個位址、哪兩個 strand 同時碰到？`support/racy_quicksort.hpp` 的 bug 在哪？想清楚再往下。
+Read the TSan report (a racy program often crashes right afterwards; that's a consequence of the race, and the report already tells you enough): which two addresses, and which two strands touched them at the same time? Where is the bug in `support/racy_quicksort.hpp`? Think it through before you read on.
 
-這題的演算法都寫成 `template <typename Exec>`，測試會用 `exec::Meter`（`problems/6.172/_shared/01_exec.hpp`：確定性地算 work／span）和 `exec::ForkJoin`（真的平行，由 TSan 把關）。
+The algorithms in this exercise are all written as `template <typename Exec>`, and the tests use both `exec::Meter` (`problems/6.172/_shared/01_exec.hpp`: computes work/span deterministically) and `exec::ForkJoin` (really parallel, guarded by TSan).
+
+Here ThreadSanitizer replaces Cilksan and `exec::Meter` stands in for Cilkscale: after finding the race, you write a race-free parallel quicksort and then coarsen it.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
 ## Stage 1 — Partition
 
-`partition_around(data, pivot_index, cmp)`：把 `data[pivot_index]` 當 pivot，分割後回傳 pivot 的最終位置 `p`，滿足 `data[p]` 是原 pivot，左邊 `<= pivot`、右邊 `>= pivot`（用 `cmp`）。`std::span<T>`，`T` 可比較。
+```cpp
+template <typename T, typename Compare = std::less<>>
+std::size_t partition_around(std::span<T> data, std::size_t pivot_index, Compare cmp = {});
+```
 
-## Stage 2 — 無 race 的平行 quicksort
+`partition_around(data, pivot_index, cmp)`: use `data[pivot_index]` as the pivot, partition, and return the pivot's final position `p`, such that `data[p]` is the original pivot, everything to its left is `<= pivot`, and everything to its right is `>= pivot` (according to `cmp`). `data` is a `std::span<T>`, and `T` is comparable.
 
-`quicksort(exec, data, cmp = {})`：pivot 取「`first`、`middle`、`last` 三者的中位數」（測試靠這個讓 Meter 結果可重現）。遞迴呼叫的兩邊必須**不相交**（不包含 pivot 位置）。每拜訪一個元素比較一次就 `charge(1)`，分割 `n` 個元素的成本是 `n`。
+## Stage 2 — A race-free parallel quicksort
 
-用 `exec::ForkJoin` 排序不會有 TSan 報告；用 `exec::Meter` 看得到 parallelism（work／span）。HW4 Checkoff 5 問的正是這個數字：把它對 `n` 畫一下，為什麼不是線性？
+```cpp
+template <typename Exec, typename T, typename Compare = std::less<>>
+void quicksort(Exec& exec, std::span<T> data, Compare cmp = {});
+```
+
+`quicksort(exec, data, cmp = {})`: choose as the pivot "the median of `first`, `middle`, and `last`" (the tests rely on this to make the Meter results reproducible). The two sides of the recursive calls must be **disjoint** (neither one includes the pivot's position). `charge(1)` for each element visited and compared, so partitioning `n` elements costs `n`.
+
+Sorting with `exec::ForkJoin` produces no TSan report; with `exec::Meter` you can see the parallelism (work/span). That's exactly the number HW4 Checkoff 5 asks for: plot it against `n`. Why isn't it linear?
+
+What the Meter tests check: 50,000 already-sorted elements cost less than `20n` work (that's what median-of-three buys you), and on `2^16` random elements the work stays below `40·n·lg n`, the span is at least `n` (the top-level partition is serial), and the parallelism is above 3 and larger than for `2^10` elements.
 
 ## Stage 3 — Coarsening
 
-`quicksort(exec, data, cmp, cutoff)`：長度 `<= cutoff` 的子陣列用 insertion sort（一樣 charge 比較次數），不再 fork。fork 次數要隨 `cutoff` 明顯下降。
+```cpp
+template <typename Exec, typename T, typename Compare>
+void quicksort(Exec& exec, std::span<T> data, Compare cmp, std::size_t cutoff);
+```
 
-## 面試追問
+`quicksort(exec, data, cmp, cutoff)`: sort subarrays of length `<= cutoff` with insertion sort (still charging the number of comparisons) instead of forking further. The number of forks must drop noticeably as `cutoff` grows: on `2^14` elements, `cutoff = 64` must make fewer than `4n/64 + 32` forks, and under a quarter of the forks that `cutoff = 1` makes.
 
-1. HW4 的 qsort-race 其實是 race 嗎？還是 benign？「看起來對」在 TSan 底下為什麼依然不算？
-2. 三數取中在 Meter 上得到 O(n) 的 span 嗎？對什麼輸入會退化？要怎麼讓 span 真的下降？（提示：平行 partition）
-3. 這裡的 pivot 分界為什麼不能用「左邊 `<=`、右邊 `>=` 且兩邊都含等於 pivot 的元素」？
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Is HW4's qsort-race really a race, or is it benign? Why does "it looks right" still not count under TSan?
+2. Does median-of-three give an O(n) span on the Meter? On what inputs does it degrade? How would you make the span really go down? (Hint: parallel partition.)
+3. Why can't the split around the pivot here be "left side `<=`, right side `>=`, with both sides including elements equal to the pivot"?

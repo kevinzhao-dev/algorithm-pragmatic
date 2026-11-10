@@ -1,7 +1,7 @@
 ---
-title: 避免死鎖（轉帳、哲學家、release-sort-reacquire）
-unit: 12 · Deterministic Execution（HW9）
-source: 6.172 Lecture 16 Deadlock；Recitation 9 第 1 題
+title: Deadlock Avoidance (bank transfers, dining philosophers, and release-sort-reacquire)
+unit: 12 · Deterministic Execution (HW9)
+source: 6.172 Lecture 16 Deadlock; Recitation 9 Problem 1
 pdf: materials/6.172/lectures/lec16.pdf
 answer: materials/6.172/recitations/r9/solutions.pdf
 read: materials/6.172/recitations/r9/problems.pdf
@@ -10,40 +10,105 @@ minutes: 90
 sanitizer: tsan
 ---
 
-# 1202 · 避免死鎖
+# 1202 · Deadlock Avoidance
 
-> **實務上為什麼會遇到**：資料庫的列鎖、檔案系統的 inode 鎖、任何「拿兩把鎖」的轉帳式操作都有死鎖問題。最常見的解法是全域順序，但鎖集合在執行時才知道時就要用 release-sort-reacquire，這也是軟體 transactional memory 的基礎。
+**Based on:** [Nondeterministic Parallel Programming](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/e4fe97d2a250b57bb1e330fba8cf5992_MIT6_172F18_lec16.pdf) · **Read first:** [R9: Deterministic Execution Problems](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/edc0cd9509aecd107836c3fbd90bc86c_MIT6_172F18_rec9.pdf)
 
-這題的所有類別都用模板參數 `Mutex`（預設 `std::mutex`）。測試一部分用真的 `std::mutex` 跑 TSan 壓力測試，一部分換成 `_shared/08_dsched.hpp` 的 `dsched::Mutex`，用確定性排程**窮舉 interleaving**，死鎖會被精確偵測到。你的程式碼只要用 `Mutex` 這個型別參數、不要自己用 sleep 或假設排程順序就好。
+> **Why this comes up in practice:** database row locks, file-system inode locks, and any transfer-style operation that "takes two locks" all run into deadlock. The most common fix is a global order, but when the set of locks is known only at run time you need release-sort-reacquire, which is also the foundation of software transactional memory.
 
-## Stage 1 — 轉帳（Recitation 9 第 1 題）
+## Original problem
 
-`Bank<Mutex>(balances)`：每個帳戶一把鎖。
+6.172 Recitation 9 Problem 1 is a true-or-false question about a bank. The bank keeps one balance and one mutex per account, and a transaction names a source account, a destination account, and an amount. Handling a transaction locks the source account's mutex, then the destination account's mutex, moves the amount from one balance to the other, and unlocks the two mutexes in reverse order. A parallel loop (`cilk_for`) handles a whole array of transactions at once.
 
-- `transfer(from, to, amount)`：鎖住兩個帳戶，餘額不足時回傳 `false` 且不變動，否則搬移並回傳 `true`。`from == to` 時不做事，回傳 `true`（不可以對同一把鎖加鎖兩次）。
-- `balance(i)`、`accounts()`：查詢（只有在沒有並行 transfer 時才會被呼叫）。
+The claim is that some input to this loop makes it deadlock. Say whether that is true or false; if it is true, explain why and how to fix it, and if it is false, explain why not.
 
-要在所有 interleaving 下都不會死鎖：鎖的取得順序要有全域順序（固定先鎖較小的索引）。
+The stages also follow the deadlock part of Lecture 16:
 
-## Stage 2 — 哲學家用餐（Lecture 16）
+- Deadlock needs three conditions at once: mutual exclusion, nonpreemption, and circular waiting.
+- A theorem shows that if the mutexes can be put in a linear order, and a thread that holds a mutex only ever tries to lock a later one, no deadlock can occur.
+- The dining philosophers: n philosophers sit around a table with one chopstick between each pair of neighbors, and each needs the chopsticks on both sides of their plate to eat. If they all pick up their left chopstick at the same moment, they all starve.
+- Algorithm L is a lock-based transactional-memory scheme that combines a finite ownership array of locks with release-sort-reacquire.
 
-`DiningTable<Mutex>(n)`：n 根筷子 n 個人。`eat(philosopher, meal)`：拿到左右兩根筷子（筷子 i 和 (i+1) mod n）之後呼叫 `meal()`，然後放回。不可以死鎖，且左右相鄰的人不可以同時吃。
+## Your task
 
-## Stage 3 — Release-Sort-Reacquire（Lecture 16 Algorithm L）
+Every class in this exercise takes a template parameter `Mutex` (default `std::mutex`). Some tests run TSan stress tests with a real `std::mutex`; others swap in `dsched::Mutex` from `_shared/08_dsched.hpp` and use deterministic scheduling to **enumerate every interleaving**, so any deadlock is detected precisely. Your code only needs to use the `Mutex` type parameter; do not sleep or assume any scheduling order yourself.
 
-鎖集合執行時才知道的情況。`LockTable<Mutex>(n)`：
+You build a deadlock-free version of the recitation's bank, then the dining philosophers, then Lecture 16's Algorithm L. Instead of a written argument, the tests check each one under every interleaving.
 
-- `table.run(body)`：執行一個交易，`body` 是可重複執行的 callable，參數是 `Transaction&`；`body` 可能被呼叫多次（中途重來），所以不要把副作用放在第一次 `access` 之前。交易結束（或 `body` 丟例外）時放掉所有鎖。
-- `txn.access(i)`：這筆交易需要第 i 把鎖。規則照 Algorithm L：
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-  1. 已持有 `i`：什麼都不做。
-  2. 目前持有的鎖都比 `i` 小（或沒持有任何鎖）：直接阻塞式取得 `i`。
-  3. 否則先 `try_lock(i)`；成功就拿到了。失敗時：放掉所有比 `i` 大的鎖，阻塞式取得 `i`，再依序把放掉的鎖拿回來，然後**重新開始交易**（`body` 從頭再跑，但已持有的鎖保留）。
+## Stage 1 — Transfers (Recitation 9 Problem 1)
 
-每次重來持有的鎖都比上一次多，所以重來的次數有上限。
+```cpp
+template <typename Mutex = std::mutex>
+class Bank {
+public:
+    explicit Bank(std::vector<std::int64_t> balances);
 
-## 面試追問
+    std::size_t accounts() const;
+    std::int64_t balance(std::size_t account) const;
+    bool transfer(std::size_t from, std::size_t to, std::int64_t amount);
+};
+```
 
-1. 死鎖需要哪四個條件？你的轉帳和哲學家分別打破了哪一個？
-2. 為什麼 Algorithm L 的第 3 步要「重新開始交易」，而不能拿回鎖之後就繼續？
-3. Recitation 9 第 2 題：一個用 CAS 實作的 n 執行緒 mutex 為什麼不需要 Ω(n) 的空間？
+`Bank<Mutex>(balances)`: one lock per account.
+
+- `transfer(from, to, amount)`: lock both accounts. If the balance is insufficient, return `false` and change nothing; otherwise move the money and return `true`. When `from == to`, do nothing and return `true` (you must not lock the same lock twice).
+- `balance(i)`, `accounts()`: queries (only called when no transfer is running concurrently).
+
+There must be no deadlock under any interleaving: acquire the locks in a global order (always lock the smaller index first).
+
+## Stage 2 — Dining philosophers (Lecture 16)
+
+```cpp
+template <typename Mutex = std::mutex>
+class DiningTable {
+public:
+    explicit DiningTable(std::size_t philosophers);
+
+    void eat(std::size_t philosopher, const std::function<void()>& meal);
+};
+```
+
+`DiningTable<Mutex>(n)`: n chopsticks and n people. `eat(philosopher, meal)`: once you hold both the left and right chopsticks (chopsticks i and (i+1) mod n), call `meal()`, then put them back. It must not deadlock, and neighbors on either side must not eat at the same time.
+
+## Stage 3 — Release-Sort-Reacquire (Lecture 16 Algorithm L)
+
+```cpp
+template <typename Mutex = std::mutex>
+class LockTable {
+public:
+    explicit LockTable(std::size_t locks);
+
+    class Transaction {
+    public:
+        void access(std::size_t lock);
+    };
+
+    template <typename Body>
+    void run(Body body);
+};
+```
+
+This is the case where the set of locks is known only at run time. `LockTable<Mutex>(n)`:
+
+- `table.run(body)`: run one transaction. `body` is a callable that can safely run more than once, and it takes a `Transaction&`; `body` may be called several times (restarting partway through), so any code before the last `access` may run more than once: put side effects only after the last `access`. When the transaction ends (or `body` throws an exception), release all of its locks.
+- `txn.access(i)`: this transaction needs lock i. The rules follow Algorithm L:
+
+  1. Already holding `i`: do nothing.
+  2. Every lock currently held is smaller than `i` (or none is held): acquire `i` directly, blocking.
+  3. Otherwise, first `try_lock(i)`; if that succeeds, you have it. If it fails: release every lock larger than `i`, acquire `i` with blocking, take the released locks back in order, and then **restart the transaction** (`body` runs again from the start, but the locks already held are kept).
+
+Every restart holds more locks than the one before, so the number of restarts is bounded.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. What are the four Coffman conditions for deadlock (Lecture 16 groups them as three, folding hold-and-wait into nonpreemption)? Which one does your transfer code break, and which one do your philosophers break?
+2. Why does step 3 of Algorithm L have to "restart the transaction" instead of simply carrying on once it has the locks back?
+3. Recitation 9 Problem 2: why doesn't an n-thread mutex implemented with CAS need Ω(n) space?
+
+---
+
+**Official solution:** [R9 Solutions](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/c6c9289ff27bb530da2bf81dd96b8627_MIT6_172F18_rec9sol.pdf). Read it after you finish.

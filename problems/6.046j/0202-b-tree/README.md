@@ -1,6 +1,6 @@
 ---
-title: B-Tree（插入、刪除、範圍掃描）
-unit: 02 · FFT 與 B-Trees（PS2）
+title: B-Tree (insertion, deletion, and range scans)
+unit: 02 · FFT and B-Trees (PS2)
 source: 6.046J Recitation 2
 pdf: materials/6.046j/recitations/rec02.pdf
 read: materials/6.046j/recitations/rec02.pdf
@@ -10,44 +10,94 @@ minutes: 180
 
 # 0202 · B-Tree
 
-> **實務上為什麼會遇到**：資料庫索引和檔案系統都用 B-tree，因為一個節點剛好放滿一個磁碟頁，樹高就是磁碟讀取次數。即使在記憶體裡，`std::set` 的指標追逐也比不上一整塊連續的鍵。
+**Based on:** [B-trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/8fd15588f584c518b6ec83aedb2b96c9_MIT6_046JS15_Recitation2.pdf) · **Read first:** [B-trees](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/8fd15588f584c518b6ec83aedb2b96c9_MIT6_046JS15_Recitation2.pdf)
 
-實作以 minimum degree `t`（`t ≥ 2`）參數化的 B-tree，`Key` 只保證可以複製、移動和 `operator<`。
+> **Why this comes up in practice:** database indexes and file systems use B-trees because one node fills exactly one disk page, so the tree's height is the number of disk reads. Even in memory, the pointer chasing of `std::set` can't match one contiguous block of keys.
 
-## 不變量
+## Your task
 
-測試會直接走訪公開的 `Node` 結構並檢查：
+Implement a B-tree parameterized by its minimum degree `t` (`t ≥ 2`). `Key` is only guaranteed to support copying, moving, and `operator<`.
 
-- 非根節點的鍵數在 `[t-1, 2t-1]`；根有 1 到 `2t-1` 個鍵；空樹的 `root()` 是 `nullptr`。
-- 內部節點有 `keys.size() + 1` 個子節點，葉節點沒有子節點（`children` 為空）。
-- 所有葉節點深度相同，樹高不超過 `⌊log_t((n+1)/2)⌋`。
-- `keys` 內遞增，整棵樹的中序走訪嚴格遞增。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-## Stage 1 — 搜尋與插入
+## Invariants
 
-| 操作 | 行為 |
+The tests walk the public `Node` structure directly and check that:
+
+- Every non-root node holds a number of keys in `[t-1, 2t-1]`; the root holds 1 to `2t-1` keys; and an empty tree's `root()` is `nullptr`.
+- An internal node has `keys.size() + 1` children, and a leaf has none (`children` is empty).
+- All leaves are at the same depth, and the height is at most `⌊log_t((n+1)/2)⌋`.
+- The keys within each `keys` are increasing, and an in-order traversal of the whole tree is strictly increasing.
+
+## Stage 1 — Search and insertion
+
+```cpp
+template <typename Key>
+class BTree {
+public:
+    struct Node {
+        std::vector<Key> keys;
+        std::vector<std::unique_ptr<Node>> children;
+
+        bool is_leaf() const { return children.empty(); }  // provided
+    };
+
+    explicit BTree(std::size_t min_degree);
+
+    BTree(const BTree&) = delete;
+    BTree& operator=(const BTree&) = delete;
+
+    BTree(BTree&& other);             // should be noexcept once implemented
+    BTree& operator=(BTree&& other);  // should be noexcept once implemented
+
+    std::size_t min_degree() const;
+    std::size_t size() const;
+    bool empty() const;
+    const Node* root() const;
+
+    bool contains(const Key& key) const;
+    bool insert(Key key);
+};
+```
+
+| Operation | Behavior |
 | --- | --- |
-| `BTree(t)` | `t < 2` 時丟 `std::invalid_argument` |
+| `BTree(t)` | Throw `std::invalid_argument` if `t < 2` |
 | `contains(key)` | `O(t log_t n)` |
-| `insert(key)` | 新增回傳 `true`；已存在回傳 `false` 且不動樹 |
-| `size()`、`empty()`、`min_degree()`、`root()` | O(1) |
-| move 建構與賦值 | 來源變成合法的空樹（可以繼續使用），`t` 保留 |
+| `insert(key)` | Return `true` if the key was added; if it already exists, return `false` and leave the tree unchanged |
+| `size()`, `empty()`, `min_degree()`, `root()` | O(1) |
+| Move construction and assignment | The destination takes over the tree together with its `t`; the source becomes a valid empty tree (it can still be used) and keeps its `t` |
 
-插入時建議在往下走的途中，先把滿的節點拆開，就不必再往回走。根被拆開時，樹高加 1。
+When inserting, you should split full nodes on the way down, so that you never have to walk back up. When the root splits, the height grows by 1.
 
-## Stage 2 — 刪除
+## Stage 2 — Deletion
 
-`erase(key)`：存在就刪除並回傳 `true`，否則回傳 `false` 且不動樹。
+```cpp
+// in class BTree<Key>
+bool erase(const Key& key);
+```
 
-往下走時保證要進入的子節點至少有 `t` 個鍵。鍵在內部節點時要用前驅或後繼換下來。根被合併到沒有鍵時要收掉，樹高減 1；最後一個鍵刪除後 `root()` 回到 `nullptr`。
+`erase(key)`: if the key exists, delete it and return `true`; otherwise return `false` and leave the tree unchanged.
 
-## Stage 3 — 實務延伸：範圍掃描
+On the way down, make sure that the child you are about to enter has at least `t` keys. When the key sits in an internal node, replace it with its predecessor or successor. When merges leave the root with no keys, remove the root and let the height drop by 1; after the last key is deleted, `root()` goes back to `nullptr`.
 
-- `lower_bound(key)`：回傳不小於 `key` 的最小鍵，沒有時回傳 `std::nullopt`，`O(t log_t n)`。
-- `scan(low, high, visit)`：依序對 `[low, high)` 內每個鍵呼叫 `visit(key)`。`k` 是區間內的鍵數，比較次數要是 `O(t log_t n + k)`，也就是 Counted 測試會擋掉「整棵樹掃一遍」的做法。
+## Stage 3 — Real-world extension: range scans
 
-## 面試追問
+```cpp
+// in class BTree<Key>
+std::optional<Key> lower_bound(const Key& key) const;
 
-1. 用 2-3-4 樹（`t = 2`）當例子，插入時為什麼預先分裂可以避免回溯？代價是什麼？
-2. 給定磁碟頁大小，`t` 要怎麼選？為什麼資料庫幾乎都用 B+ tree，而不是這個版本？
-3. 寫入密集的系統為什麼轉向 LSM-tree？用寫入放大（write amplification）比較兩者。
+template <typename Visit>
+void scan(const Key& low, const Key& high, Visit visit) const;
+```
+
+- `lower_bound(key)`: return the smallest key that is not less than `key`, or `std::nullopt` if there is none, in `O(t log_t n)`.
+- `scan(low, high, visit)`: call `visit(key)` on each key in `[low, high)`, in order. With `k` the number of keys in the range, it must make `O(t log_t n + k)` comparisons; in other words, the Counted test rejects any approach that walks the whole tree.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Using a 2-3-4 tree (`t = 2`) as the example, why does splitting in advance during insertion avoid backtracking? What does it cost?
+2. Given a disk page size, how do you choose `t`? Why do databases almost always use a B+ tree rather than this version?
+3. Why do write-heavy systems move to LSM-trees? Compare the two in terms of write amplification.

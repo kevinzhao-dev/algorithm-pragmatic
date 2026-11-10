@@ -1,44 +1,63 @@
 ---
-title: Lock-Free Stack 與 ABA 問題
-unit: 13 · Data Synchronization（HW10）
-source: 6.172 Lecture 17 Lock-Free Stack、ABA
+title: Lock-Free Stack and the ABA Problem
+unit: 13 · Data Synchronization (HW10)
+source: 6.172 Lecture 17 Lock-Free Stack, ABA
 pdf: materials/6.172/lectures/lec17.pdf
 kind: code
 minutes: 90
 sanitizer: tsan
 ---
 
-# 1302 · Lock-Free Stack 與 ABA 問題
+# 1302 · Lock-Free Stack and the ABA Problem
 
-> **實務上為什麼會遇到**：配置器的 free list、task pool 都長這樣：一個 CAS 換掉 head。看起來最簡單的 lock-free 結構，一旦節點會被重複使用，就會踩到 ABA：head 的值跟你讀到時一樣，但世界已經變了。
+**Based on:** [Synchronization Without Locks](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/fc3b846f6e13e15e4982a92369ca3825_MIT6_172F18_lec17.pdf)
 
-一個由預先配置的節點組成的堆疊。節點由 `_shared/08_node_pool.hpp` 的 `practice::NodePool` 提供（`allocate()` 回傳索引，用完 `kNilIndex`；`release(i)` 歸還；先歸還的先被重用，所以節點會很快回到另一個位置）。節點用**索引**而不是指標，這樣索引和一個版本計數可以放進同一個 64-bit word，用一次 CAS 一起更新。
+> **Why this comes up in practice:** an allocator's free list and a task pool both look like this: one CAS swaps out the head. It seems like the simplest lock-free structure, but once nodes get reused, you run into ABA: head has the same value as when you read it, but the world has changed.
 
-所有共享欄位用模板參數 `Atomic` 宣告（預設 `std::atomic`）。測試會換成 `dsched::Atomic` 窮舉 interleaving，也會用真的 atomic 跑 TSan。
+## Your task
 
-`LockFreeStack<Atomic>(capacity)`：值是 `std::uint64_t`。
+You build a stack out of preallocated nodes. The nodes come from `practice::NodePool` in `_shared/08_node_pool.hpp` (`allocate()` returns an index, or `kNilIndex` once the nodes run out; `release(i)` gives one back; nodes released first are reused first, so a node soon comes back in a different position). Nodes are referred to by **index** rather than by pointer, so that an index and a version counter fit in the same 64-bit word and can be updated together with one CAS.
 
-## Stage 1 — 序列語意
+Declare every shared field with the template parameter `Atomic` (default `std::atomic`). The tests swap in `dsched::Atomic` to enumerate interleavings, and also run TSan with real atomics.
 
-- `push(value)`：回傳是否成功（節點用完時回傳 `false`）。
-- `pop()`：回傳 `std::optional<std::uint64_t>`，空的回傳 `std::nullopt`。
+`LockFreeStack<Atomic>(capacity)`: the values are `std::uint64_t`.
 
-## Stage 2 — 併發
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-把 `head` 改成一個 `Atomic<std::uint64_t>`：`push` 和 `pop` 都用 CAS 換掉 head，失敗就重試。節點的 `next` 要用 `Atomic`（另一個 thread 可能正在讀一個已被搬走的節點）。`value` 是 push 時寫、pop 成功後讀，可以是普通欄位，但兩邊要建立 happens-before。
+## Stage 1 — Sequential semantics
 
-測試窮舉幾個小情境：每個被 push 的值，最後要恰好被 pop 一次（或留在堆疊裡）。
+```cpp
+template <template <typename> class Atomic = std::atomic>
+class LockFreeStack {
+public:
+    explicit LockFreeStack(std::size_t capacity);
+
+    bool push(std::uint64_t value);
+    std::optional<std::uint64_t> pop();
+};
+```
+
+- `push(value)`: return whether it succeeded (return `false` when the nodes run out).
+- `pop()`: return a `std::optional<std::uint64_t>`, or `std::nullopt` when the stack is empty.
+
+## Stage 2 — Concurrency
+
+Make `head` an `Atomic<std::uint64_t>`: `push` and `pop` both swap the head with a CAS and retry on failure. A node's `next` must be an `Atomic` (another thread may be reading a node that has already been moved). `value` is written at push time and read after a successful pop, so it can be a plain field, but the two sides must establish happens-before.
+
+The tests enumerate a few small scenarios: every value that is pushed must end up popped exactly once (or still be in the stack).
 
 ## Stage 3 — ABA
 
-head 的 64-bit 裡，低 32 位放索引、高 32 位放**版本計數**，每次成功的 CAS 都讓版本加一。
+Within the head's 64 bits, the low 32 bits hold the index and the high 32 bits hold a **version counter**, and every successful CAS increments the version.
 
-測試會窮舉這個情境（pool 只有 2 個節點）：thread A 開始 `pop`，在讀完 head 和 `next`、CAS 之前被搶走；thread B 把兩個節點都 pop 掉，再 push 一個新值，重複使用的節點剛好就是舊的 head，但它的 `next` 已經不同。沒有版本計數時，A 的 CAS 會成功，把一個已經回收的節點接回去。
+The tests enumerate this scenario (with a pool of only 2 nodes): thread A starts a `pop` and is preempted after reading the head and `next` but before its CAS; thread B pops both nodes, then pushes a new value, and the reused node happens to be the old head, but its `next` is now different. Without a version counter, A's CAS succeeds and links a node that has already been recycled back into the stack.
 
-建議先把版本計數拿掉跑一次，親眼看測試抓到它。
+You should first run it once with the version counter removed, to see the tests catch the bug with your own eyes.
 
-## 面試追問
+## Interview follow-ups
 
-1. 除了版本計數，還有哪些解 ABA 的方法？hazard pointer、epoch-based reclamation 的取捨是什麼？
-2. 32 位的版本計數真的不會繞回來嗎？什麼情況下要擔心？
-3. 為什麼這個堆疊是 lock-free 卻不是 wait-free？在高競爭下 pop 重試的成本會怎麼變化？
+Once you're done, answer without looking at your code:
+
+1. Besides a version counter, what other ways are there to solve ABA? What are the trade-offs of hazard pointers and epoch-based reclamation?
+2. Can a 32-bit version counter really never wrap around? When do you need to worry about it?
+3. Why is this stack lock-free but not wait-free? How does the cost of pop retries change under heavy contention?

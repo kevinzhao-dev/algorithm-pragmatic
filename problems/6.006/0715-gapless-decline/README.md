@@ -1,6 +1,6 @@
 ---
-title: 不跳時段的最長下降趨勢（受限 LIS）
-unit: 07 · Dynamic Programming I（PS7）
+title: Longest Gap-Free Decline (constrained LIS)
+unit: 07 · Dynamic Programming I (PS7)
 source: 6.006 PS7 Problem 7-5
 pdf: materials/6.006/psets/ps7/questions.pdf
 answer: materials/6.006/psets/ps7/solutions.pdf
@@ -9,47 +9,79 @@ kind: code
 minutes: 110
 ---
 
-# 0715 · 不跳時段的最長下降趨勢
+# 0715 · Longest Gap-Free Decline
 
-> **實務上為什麼會遇到**：監控系統想找「指標持續惡化、中間沒有恢復的時段」來判定事故的開始。每個時間 bucket 有多個樣本，要的不是全域的 LIS，而是連續幾個 bucket 內的趨勢。真實資料的 `k` 很大，O(k²) 的轉移撐不住，於是這題要在 DP 上疊資料結構。
+**Original problem:** [Problem Set 7 Questions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/3dff7a1ecbc241e9b91b48e69a1588d4_MIT6_006S20_ps7_questions.pdf) · **Read first:** [Lecture 16: Dynamic Programming, Part 2: LCS, LIS, Coins notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/28461a74f81101874a13d9679a40584d_MIT6_006S20_lec16.pdf), [Recitation 16 notes](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/487dc976eabd0f9bcd6a3c385203ea27_MIT6_006S20_r16.pdf)
 
-一條 series 有 `n` 個連續的時間 bucket，每個 bucket 恰好 `k` 個樣本，平攤成長度 `n·k` 的陣列，前 `k` 個屬於 bucket 0，依此類推。
+> **Why this comes up in practice:** a monitoring system looks for "a stretch in which a metric keeps getting worse, with no recovery in between" to pinpoint when an incident began. Each time bucket holds several samples, and what you want is not a global LIS but a trend across consecutive buckets. Real data has a large `k`, so O(k²) transitions can't keep up, and this exercise therefore layers a data structure on top of the DP.
 
-合法的**趨勢**是嚴格遞減的子序列，而且不跳 bucket：若它含有 bucket `a` 和 `b`（`a < b`）的樣本，那 `a..b` 之間每個 bucket 都至少要有一個樣本。
+## Original problem
 
-一次只看一關，做完再往下讀。
+6.006 PS7 Problem 7-5 follows a short seller who has collected stock prices for s companies C = (c_0, …, c_{s−1}) over n consecutive days. The prices of company c_i form a chronological sequence P_i = (p_0, …, p_{nk−1}) of nk positive integers, in which p_{kj}, …, p_{kj+k−1} are the k prices from day j, for j ∈ {0, …, n − 1}. A company's shorting value is the length of its longest strictly decreasing subsequence of prices that doesn't skip days: if the subsequence uses prices from days i < j, then every day in {i, …, j} must contribute at least one price to it.
 
-## Stage 1 — 長度
+- (a) Describe an O(snk²)-time algorithm that finds a company c_i with the highest shorting value and returns a longest such subsequence S of P_i.
+- (b) Implement part (a) in the problem set's Python template as `short_company(C, P, n, k)`, which returns the company's name and S.
+
+As with every PS7 problem, the solution must be a dynamic program presented through the SRT BOT steps.
+
+## Your task
+
+A series has `n` consecutive time buckets with exactly `k` samples each, flattened into an array of length `n·k`: the first `k` belong to bucket 0, and so on.
+
+A valid **trend** is a strictly decreasing subsequence that doesn't skip buckets: if it contains samples from buckets `a` and `b` (`a < b`), then every bucket in `a..b` must contribute at least one sample.
+
+Buckets are the original's days, `per_bucket` is k, and each series is one company's prices, so Stage 3's `worst_series` is part (a) of the original at its O(snk²) bound. Stage 4 then goes past the original with an O(n·k·log k) algorithm per series.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+Read one stage at a time, and finish it before reading on.
+
+## Stage 1 — Length
+
+```cpp
+std::size_t gapless_decline_length(std::span<const int> samples, std::size_t per_bucket);
+```
 
 `std::size_t gapless_decline_length(std::span<const int> samples, std::size_t per_bucket)`
 
-- 回傳最長趨勢的長度，O(n·k²) 時間就夠了（`samples.size() == n·k`）。
-- `per_bucket == 0` 或 `samples.size()` 不是 `per_bucket` 的倍數時丟 `std::invalid_argument`。
-- 空的 `samples` 回傳 0。
+- Return the length of the longest trend; O(n·k²) time is enough (`samples.size() == n·k`).
+- Throw `std::invalid_argument` when `per_bucket == 0` or `samples.size()` is not a multiple of `per_bucket`.
+- Return 0 for an empty `samples`.
 
-下一個樣本可以在同一個 bucket 較後面的位置，也可以在下一個 bucket。
+The next sample can be later in the same bucket, or in the next bucket.
 
-## Stage 2 — 還原一條趨勢
+## Stage 2 — Recovering one trend
 
-`std::vector<std::size_t> gapless_decline(std::span<const int> samples, std::size_t per_bucket)`：回傳一條最長趨勢的索引（遞增）。同長度任選一條。
+```cpp
+std::vector<std::size_t> gapless_decline(std::span<const int> samples,
+                                         std::size_t per_bucket);
+```
 
-## Stage 3 — 多條 series 中最差的一條
+`std::vector<std::size_t> gapless_decline(std::span<const int> samples, std::size_t per_bucket)`: return the indices of one longest trend, in increasing order. If several have the same length, pick any of them.
+
+## Stage 3 — The worst of several series
 
 ```cpp
 struct WorstSeries { std::size_t series; std::vector<std::size_t> indices; };
 WorstSeries worst_series(std::span<const std::vector<int>> series, std::size_t per_bucket);
 ```
 
-回傳趨勢最長的那條 series 的索引，以及一條最長趨勢。同長度時任選。`series` 為空或任一條長度不是 `per_bucket` 的倍數時丟 `std::invalid_argument`。
+Return the index of the series with the longest trend, along with one longest trend. Break ties however you like. Throw `std::invalid_argument` when `series` is empty or the length of any series is not a multiple of `per_bucket`.
 
 ## Stage 4 — O(n·k·log k)
 
-`gapless_decline_length`、`gapless_decline`、`worst_series` 都要改到 O(n·k·log k)（`worst_series` 再乘上 series 數）。
+`gapless_decline_length`, `gapless_decline`, and `worst_series` must all be improved to O(n·k·log k) (times the number of series for `worst_series`).
 
-Stage 1 的轉移要在一個區間內找「值比我小、又最長」的候選。這個區間由兩部分組成：同 bucket 後面的樣本、下一個 bucket 的全部樣本。下一個 bucket 是固定的集合，同 bucket 則隨著掃描逐漸長大；兩者要用不同的方法維護。
+The Stage 1 transition searches a range for the candidate that has a smaller value and the longest trend. That range has two parts: the later samples in the same bucket, and all the samples in the next bucket. The next bucket is a fixed set, while the same-bucket part grows as the scan proceeds, so the two must be maintained in different ways.
 
-## 面試追問
+## Interview follow-ups
 
-1. 為什麼「不跳 bucket」讓 LIS 的 patience 演算法（0704 Stage 4）不能直接用？
-2. Stage 4 的資料結構需要支援什麼操作？如果區間是「前後 `h` 個 bucket」的通用滑動窗，你會怎麼處理刪除？
-3. `n·k` 已經是輸入大小，為什麼這題是 polynomial 而不是 pseudopolynomial？
+Once you're done, answer without looking at your code:
+
+1. Why does "no skipped buckets" keep the patience algorithm for LIS (0704 Stage 4) from applying directly?
+2. What operations does the data structure in Stage 4 need to support? If the range were a general sliding window of "the `h` buckets before and after", how would you handle deletions?
+3. `n·k` is already the input size, so why is this problem polynomial rather than pseudopolynomial?
+
+---
+
+**Official solution:** [Problem Set 7 Solutions](https://ocw.mit.edu/courses/6-006-introduction-to-algorithms-spring-2020/ed996e1569867432dc1fbdeae53e309f_MIT6_006S20_ps7_solutions.pdf). Read it after you finish.

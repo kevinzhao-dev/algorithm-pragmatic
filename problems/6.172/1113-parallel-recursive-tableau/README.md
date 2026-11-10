@@ -1,7 +1,7 @@
 ---
-title: 遞迴與平行 Tableau（k²-way 的 work 與 span）
-unit: 11 · Caching（HW8）
-source: 6.172 HW8 §2.2 Write-up 3（k²-way work／span）
+title: Recursive and Parallel Tableau (work and span of the k²-way construction)
+unit: 11 · Caching (HW8)
+source: 6.172 HW8 §2.2 Write-up 3 (k²-way work/span)
 pdf: materials/6.172/homework/hw08/handout.pdf
 read: materials/6.172/lectures/lec08.pdf
 kind: code
@@ -9,33 +9,69 @@ minutes: 70
 sanitizer: tsan
 ---
 
-# 1113 · 遞迴與平行 Tableau
+# 1113 · Recursive and Parallel Tableau
 
-> **實務上為什麼會遇到**：把 DP 變成平行程式時，真正的限制是相依關係：同一條反對角線上的區塊可以同時算。切割成四象限，或者更細的 k² 塊，會改變 span，也改變能吃到多少核心。
+**Original problem:** [HW8: Caching and Cachegrind](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/5bc7ce0d33656fd3783abcdc3dc4eb92_MIT6_172F18hw8.pdf) · **Read first:** [Analysis of Multithreaded Algorithms](https://ocw.mit.edu/courses/6-172-performance-engineering-of-software-systems-fall-2018/5655e50541f85421cc47b7c85d8e5de3_MIT6_172F18_lec8.pdf)
 
-延續 1112 的 2N−1 壓縮陣列與 `f(A(i-1,j-1), A(i,j-1), A(i-1,j))`，`init` 仍然寫到第一列和第一行。`a` 的介面同 1112。
+> **Why this comes up in practice:** when you turn a DP into a parallel program, the real constraint is the dependences: blocks on the same anti-diagonal can be computed at the same time. Splitting into four quadrants, or into finer k² blocks, changes the span, and with it how many cores you can keep busy.
 
-因為 `sanitizer: tsan`，這題的功能測試跑在 ThreadSanitizer 下，你的平行版本要真的沒有 data race。
+## Original problem
 
-## Stage 1 — 遞迴（四象限）
+6.172 HW8 §2.2 makes the tableau construction from Lecture 8 recursive. The tableau is an N × N table whose entry (i, j) is f of its upper-left, left, and upper neighbors, stored in an array of only 2N − 1 entries. The recursive version computes a single cell directly; otherwise it splits the range of rows and columns still to be computed into quadrants (halving a dimension only while it is longer than 1) and processes them in the order top-left, top-right, bottom-left, bottom-right. Once the top-left quadrant is done, the top-right and bottom-left quadrants can run in parallel, which gives work Θ(n²), span Θ(n^{lg 3}), and parallelism Θ(n^{2 − lg 3}); Lecture 8 also showed a more parallel construction that divides the tableau 9 ways.
 
-`recursive_tableau(a, n, init, f)`：把還沒算的格子範圍（第 1..n−1 列、第 1..n−1 行）遞迴切成四個象限：左上、右上、左下、右下，依這個順序做。列數或行數為 1 就不再切那一維（`mid` 取 `begin + len/2`）。回傳 `A(n−1, n−1)`。
+- Write-up 3: derive general formulas for the work and the span of a k²-way construction, in which the tableau is divided into k² pieces of size n/k × n/k.
 
-## Stage 2 — 平行
+## Your task
 
-`parallel_tableau(a, n, init, f)`：左上象限做完之後，**右上和左下可以同時做**（用 `harness/forkjoin.hpp` 的 `practice::fork2`），全部做完才做右下。可以在區塊夠小時（例如邊長 ≤ 32）切回序列版本。
+Keep 1112's compressed 2N−1 array and `f(A(i-1,j-1), A(i,j-1), A(i-1,j))`; `init` still goes into the first row and the first column. `a` has the same interface as in 1112.
 
-結果必須與序列版完全相同。想想為什麼兩個平行的象限不會寫到同一格、也不會讀到正在被寫的格子（1112 的對應方式幫了大忙）。
+Because of `sanitizer: tsan`, this exercise's functional tests run under ThreadSanitizer, so your parallel version must truly have no data races.
 
-## Stage 3 — k²-way 的 work 與 span（Write-up 3）
+Beyond the write-up's formulas, you implement the four-quadrant recursion, run it in parallel with fork-join, and compute the work and span of the k²-way construction in code.
 
-`tableau_work_span(n, k)`：`n = k^h`，把 `n×n` 切成 k² 塊邊長 n/k 的小塊，每塊遞迴處理，`n == 1` 時 work 與 span 都是 1。同一條反對角線上的塊可以平行，所以總共有 `2k − 1` 個階段。回傳 `{work, span}`。
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
 
-- `work`：總格數。
-- `span`：遞迴式 `S(n) = (2k−1)·S(n/k)`，`S(1) = 1`。
+## Stage 1 — Recursion (four quadrants)
 
-## 面試追問
+```cpp
+// Arr has exactly 2n - 1 cells, exposes size(), get(k), set(k, v).
+template <typename Arr, typename F>
+double recursive_tableau(Arr& a, std::size_t n, double init, F f);
+```
 
-1. 把 span 寫成 n 的冪次：`Θ(n^{log_k(2k−1)})`。k 越大 parallelism 越高，代價是什麼？（作業 Write-up 3）
-2. 如果把 k² 塊裡同一條反對角線的塊全部 spawn，再全部 sync，跟兩兩用 `fork2` 差在哪裡？
-3. 這題 TSan 是 clean 的，那 determinacy race 呢？如果 `f` 有內部共享狀態，TSan 一定抓得到嗎？
+`recursive_tableau(a, n, init, f)`: recursively split the range of cells not yet computed (rows 1..n−1, columns 1..n−1) into four quadrants, top-left, top-right, bottom-left, and bottom-right, and process them in that order. Stop splitting a dimension once it is 1 row or 1 column long (`mid` is `begin + len/2`). Return `A(n−1, n−1)`.
+
+## Stage 2 — Parallel
+
+```cpp
+template <typename Arr, typename F>
+double parallel_tableau(Arr& a, std::size_t n, double init, F f);
+```
+
+`parallel_tableau(a, n, init, f)`: once the top-left quadrant is done, **the top-right and bottom-left quadrants can run at the same time** (with `practice::fork2` from `harness/forkjoin.hpp`), and the bottom-right quadrant runs only after both are done. You may switch back to the serial version once a block is small enough (for example, side length ≤ 32).
+
+The result must be identical to the serial version's. Think about why the two parallel quadrants never write the same slot, nor read a slot that is being written (1112's mapping helps a lot here).
+
+## Stage 3 — Work and span of the k²-way construction (Write-up 3)
+
+```cpp
+struct WorkSpan {
+    std::uint64_t work = 0;
+    std::uint64_t span = 0;
+};
+
+inline WorkSpan tableau_work_span(std::size_t n, std::size_t k);
+```
+
+`tableau_work_span(n, k)`: with `n = k^h`, split the `n×n` table into k² blocks of side n/k and handle each block recursively; when `n == 1`, work and span are both 1. Blocks on the same anti-diagonal can run in parallel, so there are `2k − 1` phases in all. Return `{work, span}`.
+
+- `work`: the total number of cells.
+- `span`: the recurrence `S(n) = (2k−1)·S(n/k)`, `S(1) = 1`.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Written as a power of n, the span is `Θ(n^{log_k(2k−1)})`. The larger k is, the higher the parallelism; what is the price? (Homework Write-up 3)
+2. If you spawned all the blocks on one anti-diagonal of the k² blocks and then synced them all, how would that differ from using `fork2` on pairs?
+3. This exercise is TSan-clean, but what about determinacy races? If `f` has internal shared state, is TSan guaranteed to catch it?

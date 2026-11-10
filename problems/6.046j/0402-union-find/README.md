@@ -1,6 +1,6 @@
 ---
-title: Union-Find（鏈結串列到 Path Compression）
-unit: 04 · Amortization 與 Randomization（PS4）
+title: Union-Find (from linked lists to path compression)
+unit: 04 · Amortization and Randomization (PS4)
 source: 6.046J Recitation 3
 pdf: materials/6.046j/recitations/rec03.pdf
 read: materials/6.046j/recitations/rec03.pdf, materials/6.046j/lectures/lec05.pdf
@@ -10,46 +10,105 @@ minutes: 100
 
 # 0402 · Union-Find
 
-> **實務上為什麼會遇到**：帳號合併、Kruskal 最小生成樹、影像連通區塊。需求只有「把兩堆合併」和「問兩個東西是不是同一堆」，但攤銷之後每次操作幾乎是常數，這個結果每個工程師都該親手驗證一次。
+**Based on:** [Amortization: Union-find](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d25d9d3ba96321326601c8f6dd073e60_MIT6_046JS15_Recitation3.pdf) · **Read first:** [Amortization: Union-find](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/d25d9d3ba96321326601c8f6dd073e60_MIT6_046JS15_Recitation3.pdf), [Amortization: Amortized Analysis](https://ocw.mit.edu/courses/6-046j-design-and-analysis-of-algorithms-spring-2015/13e2c7d165259712327af0af312a068e_MIT6_046JS15_lec05.pdf)
 
-元素編號從 `0` 開始。傳入不存在的元素時丟 `std::out_of_range`。
+> **Why this comes up in practice:** merging accounts, Kruskal's minimum spanning tree, connected regions in an image. The only requirements are "merge two groups" and "ask whether two things are in the same group", yet once amortized, each operation is almost constant time, a result every engineer should verify by hand once.
 
-## Stage 1 — 加權鏈結串列
+## Your task
 
-`ListDsu(n)`：`n` 個單元素集合。每個集合用一條鏈結串列表示，每個元素直接存代表元素。
+Elements are numbered from `0`. Throw `std::out_of_range` when given an element that doesn't exist.
 
-| 操作 | 行為 | 複雜度 |
+You build two disjoint-set structures, weighted linked lists and a forest with both classic optimizations, measure their costs, and then use the forest to merge duplicate account records.
+
+Write your code in `solution.hpp`. Each stage lists the declarations it adds, copied from that file.
+
+## Stage 1 — Weighted linked lists
+
+```cpp
+class ListDsu {
+public:
+    explicit ListDsu(std::size_t n);
+
+    int find(int x) const;
+    bool unite(int x, int y);
+    std::size_t set_size(int x) const;
+    std::vector<int> members(int x) const;
+
+    // Cost model used by the tests: the number of representative pointers rewritten.
+    std::uint64_t rep_updates() const;
+};
+```
+
+`ListDsu(n)`: `n` singleton sets. Each set is a linked list, and each element stores its representative directly.
+
+| Operation | Behavior | Complexity |
 | --- | --- | --- |
-| `find(x)` | 回傳代表元素 | O(1) |
-| `unite(x, y)` | 合併；已在同一集合時回傳 `false`，否則回傳 `true` | O(較小集合的大小) |
-| `set_size(x)`、`members(x)` | 集合大小、所有成員（順序不限） | O(1)、O(大小) |
-| `rep_updates()` | 累積改寫過幾個元素的代表指標 | O(1) |
+| `find(x)` | Return the representative | O(1) |
+| `unite(x, y)` | Merge the two sets; return `false` if they are already the same set, otherwise `true` | O(size of the smaller set) |
+| `set_size(x)`, `members(x)` | The size of the set, and all of its members (in any order) | O(1), O(size) |
+| `rep_updates()` | The total number of representative pointers rewritten so far | O(1) |
 
-**一定要把小的併進大的**。測試用 `rep_updates()` 驗證：合併完所有元素時總次數 `≤ n lg n`，否則就退化成 Θ(n²)。
+**Always merge the smaller set into the larger one.** The tests check this with `rep_updates()`. Once all `n` elements are merged, the total must be `≤ n lg n`; when sets of equal size are merged in pairs, `≤ (n/2) lg n + n`; and when singletons join one growing set one at a time, in either argument order, `≤ n`. Otherwise it degrades to Θ(n²).
 
-## Stage 2 — 樹狀森林
+## Stage 2 — A forest of trees
 
-`ForestDsu`：`union by rank` 加上 `path compression`。
+```cpp
+class ForestDsu {
+public:
+    explicit ForestDsu(std::size_t n = 0);
 
-- `ForestDsu(n)`：預先建立 `n` 個元素；`make_set()` 新增一個元素並回傳編號。
-- `find(x)`、`unite(x, y)`（語意同 Stage 1）、`connected(x, y)`、`set_size(x)`（O(α)）、`count()`（目前集合數）、`size()`（元素總數）。
-- `depth(x)`：不做壓縮，回傳 `x` 到根的邊數。
-- `hops()`：累積 `find` 沿 `parent` 走了幾步（`depth` 不算）。
+    int make_set();
+    int find(int x);
+    bool unite(int x, int y);
+    bool connected(int x, int y);
+    std::size_t set_size(int x);
+    std::size_t count() const;
+    std::size_t size() const;
 
-兩個最佳化都要做。少了 union by rank，`depth` 測試會發現樹變高；少了 path compression，`hops` 測試會發現 `find` 走太多步。
+    // Parent links from x to its root, without compressing anything.
+    int depth(int x) const;
 
-## Stage 3 — 實務延伸：帳號合併索引
+    // Cost model used by the tests: the number of parent links followed by find.
+    std::uint64_t hops() const;
+};
+```
 
-先幫 `ForestDsu` 加上 `members(x)`，複雜度 **O(集合大小)**，用不到額外的成員 vector：每個元素放一個環狀 `next` 指標，合併時交換兩邊的 `next` 就能把兩條環接起來。
+`ForestDsu`: `union by rank` plus `path compression`.
 
-`DedupIndex`：帳號資料合併。
+- `ForestDsu(n)`: create `n` elements up front; `make_set()` adds one element and returns its number.
+- `find(x)`, `unite(x, y)` (with the same semantics as in Stage 1), `connected(x, y)`, `set_size(x)` (O(α)), `count()` (the current number of sets), and `size()` (the total number of elements).
+- `depth(x)`: return the number of edges from `x` to its root, without compressing.
+- `hops()`: the total number of steps `find` has taken along `parent` links (`depth` doesn't count).
 
-- `add_record(identifiers)`：新增一筆紀錄（可以有多個 email、電話）並回傳編號（`0, 1, 2, ...`）。只要共用任何一個 identifier，就屬於同一個實體，傳遞成立。`identifiers` 可以為空，也可以重複。
-- `same_entity(a, b)`、`entity_count()`。
-- `entity_members(record)`：回傳該實體所有紀錄的編號，**遞增排序**。
+You must do both optimizations. Without union by rank, the `depth` test notices the trees growing tall; without path compression, the `hops` test notices `find` taking too many steps.
 
-## 面試追問
+## Stage 3 — Real-world extension: an account deduplication index
 
-1. Stage 1 的「小併大」為什麼保證每個元素最多被改寫 `lg n` 次？用 aggregate、accounting、potential 三種方法各說一次。
-2. 只做 path compression 或只做 union by rank，攤銷複雜度各是多少？兩個都做時，反阿克曼函數從哪裡來？
-3. 這個資料結構支援「拆開」嗎？如果帳號合併要能復原（undo），你會怎麼改？
+```cpp
+// in class ForestDsu
+std::vector<int> members(int x);
+
+class DedupIndex {
+public:
+    int add_record(const std::vector<std::string>& identifiers);
+    bool same_entity(int a, int b);
+    std::size_t entity_count() const;
+    std::vector<int> entity_members(int record);
+};
+```
+
+First add `members(x)` to `ForestDsu`, in **O(size of the set)** and without an extra vector of members: give each element a circular `next` pointer, and when merging, swapping the two sides' `next` pointers joins the two rings into one.
+
+`DedupIndex`: merging account records.
+
+- `add_record(identifiers)`: add a record (which may have several emails and phone numbers) and return its number (`0, 1, 2, ...`). Records that share any identifier belong to the same entity, and this relation is transitive. `identifiers` may be empty and may contain duplicates.
+- `same_entity(a, b)`, `entity_count()`.
+- `entity_members(record)`: return the numbers of all records of that record's entity, **sorted in increasing order**.
+
+## Interview follow-ups
+
+Once you're done, answer without looking at your code:
+
+1. Why does Stage 1's "merge small into large" guarantee that each element is rewritten at most `lg n` times? Explain it once each with the aggregate, accounting, and potential methods.
+2. What is the amortized complexity with only path compression, and with only union by rank? With both, where does the inverse Ackermann function come from?
+3. Does this data structure support "splitting"? If account merges had to be undoable, how would you change it?
