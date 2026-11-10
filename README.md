@@ -28,7 +28,7 @@ It tells you which exercise is next, which lecture notes to read first, and wher
 ./practice test 0114
 ```
 
-`0114` is the exercise number. A fragment of the slug works too, such as `doubly`.
+`0114` is the exercise number. A fragment of the slug works too, such as `doubly`. When a number exists in more than one course, add the course, as in `./practice test 6.006/0111`.
 
 To follow a single course:
 
@@ -51,8 +51,8 @@ Every README links to its MIT source on OCW. Assignment problems also restate th
 6.006/0114-doubly-linked-list — Doubly Linked List (O(1) range moves)
 
   stage 1  ✓ 10/10
-  stage 2  ✗ 2/6  ← 目前關卡
-  stage 3  · 尚未解鎖
+  stage 2  ✗ 2/6  ← current stage
+  stage 3  · locked
 ```
 
 There are four kinds of exercises:

@@ -1,14 +1,14 @@
 #!/usr/bin/env -S python3 -I
-"""practice — 依序練功的指令列工具。
+"""practice: a command-line tool for working through the exercises in order.
 
-  ./practice next [--course 6.172]    下一題該做什麼
-  ./practice test <題目>              建置並測試（關卡制）
-  ./practice list [--course 6.006]    所有題目與進度
-  ./practice done <題目>              手動標記完成（書面題用）
-  ./practice roadmap                  依題目資料重新產生 ROADMAP.md
-  ./practice audit [--course 6.006]   維護用：確認題目骨架會失敗、參考解全部通過
+  ./practice next [--course 6.172]    show what to do next
+  ./practice test <exercise>          build and test, stage by stage
+  ./practice list [--course 6.006]    list every exercise and your progress
+  ./practice done <exercise>          mark an exercise done by hand (for written exercises)
+  ./practice roadmap                  regenerate ROADMAP.md from the exercise data
+  ./practice audit [--course 6.006]   for maintainers: check that skeletons fail and reference solutions pass
 
-<題目> 可以是編號（0104）、slug 片段（doubly），或完整路徑（6.006/0104-doubly-linked-list）。
+<exercise> can be a number (0114), a slug fragment (doubly), or a full path (6.006/0114-doubly-linked-list).
 """
 
 from __future__ import annotations
@@ -124,9 +124,16 @@ def resolve(query: str, exercises: list[Exercise]) -> Exercise:
     if len(matches) == 1:
         return matches[0]
     if not matches:
-        sys.exit(f"找不到題目：{query}（用 ./practice list 看清單）")
+        sys.exit(f"No exercise matches {query} (run ./practice list to see them all)")
     listing = "\n".join(f"  {e.id}" for e in matches[:12])
-    sys.exit(f"「{query}」符合多題，請寫得更精確：\n{listing}")
+    sys.exit(f"\"{query}\" matches more than one exercise; be more specific:\n{listing}")
+
+
+def short_query(exercise: Exercise, exercises: list[Exercise]) -> str:
+    """The shortest query that resolve() maps to exactly this exercise."""
+    if sum(e.number == exercise.number for e in exercises) == 1:
+        return exercise.number
+    return f"{exercise.course}/{exercise.number}"
 
 
 def load_progress() -> dict[str, dict]:
@@ -161,7 +168,7 @@ def configure(mode: str, reference: bool) -> pathlib.Path:
         ]
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode != 0:
-            sys.exit(f"CMake 設定失敗：\n{completed.stdout}\n{completed.stderr}")
+            sys.exit(f"CMake configuration failed:\n{completed.stdout}\n{completed.stderr}")
     return directory
 
 
@@ -220,22 +227,26 @@ def run_tests(exercise: Exercise, mode: str, reference: bool, flags: list[str]) 
 
     finished_cleanly = report.exit_code in (0, 1) and not report.timed_out
     if running is not None or not finished_cleanly:
-        report.crashed_in = running or ("(所有測試結束之後)" if report.results else "(測試啟動前)")
+        report.crashed_in = running or ("(after all tests finished)" if report.results else "(before any test started)")
         # Sanitizer reports lead with the diagnosis, so keep the start rather than the tail.
         report.trailing_output = "\n".join(details + other + stderr.splitlines()[:80])
     return report
 
 
+def plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
 def failure_reason(report: RunReport, timeout_hint: str) -> str:
     if report.timed_out:
-        return f"逾時（{timeout_hint}）"
+        return f"timed out ({timeout_hint})"
     if "ThreadSanitizer" in report.trailing_output:
-        return "ThreadSanitizer 偵測到 data race"
+        return "ThreadSanitizer found a data race"
     if "AddressSanitizer" in report.trailing_output:
-        return "AddressSanitizer 偵測到記憶體錯誤"
+        return "AddressSanitizer found a memory error"
     if "runtime error:" in report.trailing_output:
-        return "UBSan 偵測到未定義行為"
-    return "程式崩潰"
+        return "UBSan found undefined behavior"
+    return "the program crashed"
 
 
 def summarize_stages(results: list[TestResult]) -> dict[int, tuple[int, int]]:
@@ -251,13 +262,13 @@ def cmd_test(args: argparse.Namespace) -> int:
     exercise = resolve(args.problem, exercises)
     print(f"{exercise.id} — {exercise.title}")
     if exercise.kind not in AUTOGRADED_KINDS:
-        print("這是書面題：寫完後對照解答，然後執行")
-        print(f"  ./practice done {exercise.number}")
+        print("This is a written exercise. Once your answer is written and checked against the official solution, run:")
+        print(f"  ./practice done {short_query(exercise, exercises)}")
         return 0
 
     mode = exercise.functional_mode()
     if not build(mode, args.reference, [exercise.target]):
-        print("\n✗ 編譯失敗")
+        print("\n✗ Build failed")
         return 1
     flags = ["--skip-perf"]
     if args.stage:
@@ -266,8 +277,8 @@ def cmd_test(args: argparse.Namespace) -> int:
     results = list(functional.results)
 
     if functional.timed_out or functional.crashed_in:
-        reason = failure_reason(functional, "可能有無窮迴圈")
-        print(f"\n✗ {reason}，發生在：{functional.crashed_in}")
+        reason = failure_reason(functional, "possibly an infinite loop")
+        print(f"\n✗ Functional tests: {reason}, at: {functional.crashed_in}")
         print(functional.trailing_output)
         return 1
 
@@ -276,13 +287,13 @@ def cmd_test(args: argparse.Namespace) -> int:
     all_functional_pass = all(p == t for p, t in stages.values())
     if all_functional_pass and not args.no_perf and not args.stage:
         if not build("release", args.reference, [exercise.target]):
-            print("\n✗ Release 編譯失敗")
+            print("\n✗ Release build failed")
             return 1
         performance = run_tests(exercise, "release", args.reference, ["--perf-only"])
         results += performance.results
         if performance.timed_out or performance.crashed_in:
-            reason = failure_reason(performance, "複雜度可能不對")
-            print(f"\n✗ 效能測試{reason}，發生在：{performance.crashed_in}")
+            reason = failure_reason(performance, "the complexity may be wrong")
+            print(f"\n✗ Performance tests: {reason}, at: {performance.crashed_in}")
             print(performance.trailing_output)
             return 1
 
@@ -293,30 +304,30 @@ def cmd_test(args: argparse.Namespace) -> int:
         if passed == total:
             print(f"  stage {stage}  ✓ {passed}/{total}")
         elif stage == current_stage:
-            print(f"  stage {stage}  ✗ {passed}/{total}  ← 目前關卡")
+            print(f"  stage {stage}  ✗ {passed}/{total}  ← current stage")
         else:
-            print(f"  stage {stage}  · 尚未解鎖")
+            print(f"  stage {stage}  · locked")
 
     if current_stage is not None:
         print()
         shown = 0
         for result in results:
             if result.stage == current_stage and result.status != "pass" and shown < args.max_failures:
-                tag = "尚未實作" if result.status == "todo" else "失敗"
+                tag = "not implemented" if result.status == "todo" else "failed"
                 print(f"[{tag}] {result.name}")
                 if result.details:
                     print(result.details)
                 shown += 1
         hidden = sum(r.stage == current_stage and r.status != "pass" for r in results) - shown
         if hidden > 0:
-            print(f"（還有 {hidden} 個失敗的測試，用 --max-failures 顯示更多）")
+            print(f"({plural(hidden, 'more failing test')}; use --max-failures to show more)")
         return 1
 
     if args.stage or args.no_perf:
-        print("\n✓ 選定範圍全部通過（完整驗收請跑不帶參數的 ./practice test）")
+        print("\n✓ Everything selected passes (run ./practice test without options for the full check)")
         return 0
 
-    print("\n✓ 全部關卡通過")
+    print("\n✓ All stages pass")
     if not args.reference:
         mark_done(exercise, "passed")
     return 0
@@ -340,40 +351,41 @@ def cmd_list(args: argparse.Namespace) -> int:
         mark = "✓" if finished else "·"
         minutes = exercise.meta.get("minutes", "?")
         print(f" {mark} {exercise.number}  {exercise.kind:<7} {minutes:>4}m  {exercise.title}")
-    print(f"\n進度：{done_count}/{shown_count}")
+    print(f"\nProgress: {done_count}/{shown_count}")
     return 0
 
 
 def cmd_next(args: argparse.Namespace) -> int:
     progress = load_progress()
-    for exercise in discover():
+    exercises = discover()
+    for exercise in exercises:
         if args.course and exercise.course != args.course:
             continue
         if exercise.id in progress:
             continue
         relative = exercise.path.relative_to(ROOT)
-        print(f"下一題：{exercise.id}")
-        print(f"  {exercise.title}（{exercise.kind}，約 {exercise.meta.get('minutes', '?')} 分鐘）")
-        print(f"  來源：{exercise.meta.get('source', '?')}")
+        print(f"Next: {exercise.id}")
+        print(f"  {exercise.title} ({exercise.kind}, about {exercise.meta.get('minutes', '?')} minutes)")
+        print(f"  Source: {exercise.meta.get('source', '?')}")
         reading = [p.strip() for p in exercise.meta.get("read", "").split(",") if p.strip()]
         if reading:
-            print("  先讀：")
+            print("  Read first:")
             for path in reading:
                 print(f"    {path}")
-        print(f"  題目：{relative}/README.md")
+        print(f"  Exercise: {relative}/README.md")
         if exercise.kind in AUTOGRADED_KINDS:
-            print(f"  測試：./practice test {exercise.number}")
+            print(f"  Test: ./practice test {short_query(exercise, exercises)}")
         else:
-            print(f"  完成：./practice done {exercise.number}")
+            print(f"  When done: ./practice done {short_query(exercise, exercises)}")
         return 0
-    print("全部完成了。")
+    print("You have finished every exercise.")
     return 0
 
 
 def cmd_done(args: argparse.Namespace) -> int:
     exercise = resolve(args.problem, discover())
     mark_done(exercise, "done")
-    print(f"已標記完成：{exercise.id}")
+    print(f"Marked as done: {exercise.id}")
     return 0
 
 
@@ -411,7 +423,7 @@ def cmd_roadmap(args: argparse.Namespace) -> int:
             )
         lines.append("")
     (ROOT / "ROADMAP.md").write_text("\n".join(lines), encoding="utf-8")
-    print(f"已更新 ROADMAP.md（{len(exercises)} 題）")
+    print(f"Updated ROADMAP.md ({plural(len(exercises), 'exercise')})")
     return 0
 
 
@@ -420,18 +432,18 @@ def audit_structure(exercise: Exercise) -> list[str]:
     required = ["title", "unit", "source", "pdf", "kind", "minutes"]
     for key in required:
         if key not in exercise.meta:
-            problems.append(f"front matter 缺少 {key}")
+            problems.append(f"front matter is missing {key}")
     paths = [exercise.meta.get("pdf", "")] + [
         p.strip() for p in exercise.meta.get("read", "").split(",") + [exercise.meta.get("answer", "")]
     ]
     for relative in paths:
         if relative and not (ROOT / relative).exists():
-            problems.append(f"找不到教材：{relative}")
+            problems.append(f"course material not found: {relative}")
     if exercise.kind in AUTOGRADED_KINDS:
         if not list((exercise.path / "tests").glob("*.cpp")):
-            problems.append("缺少 tests/*.cpp")
+            problems.append("no tests/*.cpp")
         if not (SOLUTIONS / exercise.course / exercise.slug).is_dir():
-            problems.append("缺少參考解")
+            problems.append("no reference solution")
     return problems
 
 
@@ -456,27 +468,27 @@ def cmd_audit(args: argparse.Namespace) -> int:
     }
     for (mode, reference), group in groups.items():
         if group and not build(mode, reference, [e.target for e in group]):
-            issues.append(f"建置失敗：mode={mode} reference={reference}")
+            issues.append(f"build failed: mode={mode} reference={reference}")
 
     def check(job: tuple[Exercise, str, bool, list[str]]) -> list[str]:
         exercise, mode, reference, flags = job
         if not binary_path(exercise, mode, reference).exists():
-            return [f"{exercise.id}: [{mode}{' ref' if reference else ''}] 沒有產生執行檔"]
+            return [f"{exercise.id}: [{mode}{' ref' if reference else ''}] produced no executable"]
         report = audit_run(exercise, mode, reference, flags)
-        label = f"{exercise.id}: [{mode}{' 參考解' if reference else ' 骨架'}]"
+        label = f"{exercise.id}: [{mode}{' reference' if reference else ' skeleton'}]"
         if report.timed_out:
-            return [f"{label} 逾時，在 {report.crashed_in}"]
+            return [f"{label} timed out, at {report.crashed_in}"]
         if report.crashed_in:
-            return [f"{label} 崩潰，在 {report.crashed_in}\n{report.trailing_output}"]
+            return [f"{label} crashed, at {report.crashed_in}\n{report.trailing_output}"]
         failing = [r for r in report.results if r.status != "pass"]
         if reference:
-            return [f"{label} 未通過：{r.name}\n{r.details}" for r in failing]
+            return [f"{label} failed: {r.name}\n{r.details}" for r in failing]
         if not report.results:
-            return [f"{label} 沒有任何測試"]
+            return [f"{label} has no tests"]
         if not failing:
-            return [f"{label} 骨架竟然全部通過，測試太弱或骨架含答案"]
+            return [f"{label} passes every test, so the tests are too weak or the skeleton contains the answer"]
         unexpected = [r for r in failing if r.status == "fail" and "not implemented" not in r.details]
-        return [f"{label} 骨架應回報「尚未實作」但失敗了：{r.name}\n{r.details}" for r in unexpected[:3]]
+        return [f"{label} should report \"not implemented\" but failed: {r.name}\n{r.details}" for r in unexpected[:3]]
 
     jobs: list[tuple[Exercise, str, bool, list[str]]] = []
     for exercise in graded:
@@ -487,13 +499,13 @@ def cmd_audit(args: argparse.Namespace) -> int:
         for found in pool.map(check, jobs):
             issues += found
 
-    print(f"檢查了 {len(exercises)} 題（自動評測 {len(graded)} 題）")
+    print(f"Checked {plural(len(exercises), 'exercise')} ({len(graded)} graded automatically)")
     if issues:
-        print(f"\n發現 {len(issues)} 個問題：")
+        print(f"\nFound {plural(len(issues), 'problem')}:")
         for issue in issues:
             print(f"- {issue}")
         return 1
-    print("全部正常：骨架都會回報尚未實作，參考解全部通過。")
+    print("All good: every skeleton reports that it is not implemented, and every reference solution passes.")
     return 0
 
 
@@ -501,7 +513,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
     target = pathlib.Path(os.environ.get("PRACTICE_BUILD_ROOT", ROOT / "build"))
     if target.exists():
         shutil.rmtree(target)
-    print(f"已清除 {target}")
+    print(f"Removed {target}")
     return 0
 
 
@@ -519,10 +531,10 @@ def main() -> int:
 
     test_parser = commands.add_parser("test")
     test_parser.add_argument("problem")
-    test_parser.add_argument("--stage", type=int, default=0, help="只跑某一關")
-    test_parser.add_argument("--no-perf", action="store_true", help="略過 Release 效能測試")
-    test_parser.add_argument("--max-failures", type=int, default=3, help="最多顯示幾個失敗的測試")
-    test_parser.add_argument("--reference", action="store_true", help="改用 solutions/ 的參考解（會爆雷）")
+    test_parser.add_argument("--stage", type=int, default=0, help="run only this stage")
+    test_parser.add_argument("--no-perf", action="store_true", help="skip the Release performance tests")
+    test_parser.add_argument("--max-failures", type=int, default=3, help="show at most this many failing tests")
+    test_parser.add_argument("--reference", action="store_true", help="use the reference solution in solutions/ instead (spoilers)")
     test_parser.set_defaults(handler=cmd_test)
 
     done_parser = commands.add_parser("done")
@@ -534,7 +546,7 @@ def main() -> int:
 
     audit_parser = commands.add_parser("audit")
     audit_parser.add_argument("--course", choices=COURSE_ORDER)
-    audit_parser.add_argument("--only", help="只檢查 id 符合此正規表示式的題目")
+    audit_parser.add_argument("--only", help="only check exercises whose id matches this regular expression")
     audit_parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     audit_parser.set_defaults(handler=cmd_audit)
 
